@@ -1,6 +1,6 @@
+use crate::error::{NovaError, NovaResult};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use crate::error::{NovaError, NovaResult};
 
 /// Engine configuration structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,50 +84,52 @@ impl EngineConfig {
     pub fn load_from_file<P: AsRef<std::path::Path>>(path: P) -> NovaResult<Self> {
         let content = std::fs::read_to_string(path)
             .map_err(|e| NovaError::config(format!("Failed to read config file: {}", e)))?;
-        
+
         let config: Self = toml::from_str(&content)?;
         Ok(config)
     }
-    
+
     /// Save configuration to TOML file
     pub fn save_to_file<P: AsRef<std::path::Path>>(&self, path: P) -> NovaResult<()> {
         let content = toml::to_string_pretty(self)
             .map_err(|e| NovaError::config(format!("Failed to serialize config: {}", e)))?;
-        
+
         std::fs::write(path, content)
             .map_err(|e| NovaError::config(format!("Failed to write config file: {}", e)))?;
-        
+
         Ok(())
     }
-    
+
     /// Merge with another configuration, preferring values from `other`
     pub fn merge(&mut self, other: EngineConfig) {
         // Simple merge - in a real implementation, this would be more sophisticated
         *self = other;
     }
-    
+
     /// Validate configuration values
     pub fn validate(&self) -> NovaResult<()> {
         if self.memory.pool_count == 0 {
             return Err(NovaError::config("Memory pool count cannot be zero"));
         }
-        
+
         if self.memory.gc_threshold < 0.1 || self.memory.gc_threshold > 1.0 {
-            return Err(NovaError::config("GC threshold must be between 0.1 and 1.0"));
+            return Err(NovaError::config(
+                "GC threshold must be between 0.1 and 1.0",
+            ));
         }
-        
+
         if self.threading.worker_threads == 0 {
             return Err(NovaError::config("Worker thread count cannot be zero"));
         }
-        
+
         if self.events.queue_size == 0 {
             return Err(NovaError::config("Event queue size cannot be zero"));
         }
-        
+
         if self.events.priority_levels == 0 {
             return Err(NovaError::config("Priority levels cannot be zero"));
         }
-        
+
         Ok(())
     }
 }
@@ -135,26 +137,31 @@ impl EngineConfig {
 /// Helper function to parse memory size strings like "1GB", "512MB"
 pub fn parse_memory_size(size_str: &str) -> NovaResult<usize> {
     let size_str = size_str.trim().to_uppercase();
-    
+
     if let Some(num_str) = size_str.strip_suffix("GB") {
-        let num: f64 = num_str.parse()
+        let num: f64 = num_str
+            .parse()
             .map_err(|_| NovaError::config("Invalid memory size format"))?;
         Ok((num * 1024.0 * 1024.0 * 1024.0) as usize)
     } else if let Some(num_str) = size_str.strip_suffix("MB") {
-        let num: f64 = num_str.parse()
+        let num: f64 = num_str
+            .parse()
             .map_err(|_| NovaError::config("Invalid memory size format"))?;
         Ok((num * 1024.0 * 1024.0) as usize)
     } else if let Some(num_str) = size_str.strip_suffix("KB") {
-        let num: f64 = num_str.parse()
+        let num: f64 = num_str
+            .parse()
             .map_err(|_| NovaError::config("Invalid memory size format"))?;
         Ok((num * 1024.0) as usize)
     } else if let Some(num_str) = size_str.strip_suffix("B") {
-        let num: usize = num_str.parse()
+        let num: usize = num_str
+            .parse()
             .map_err(|_| NovaError::config("Invalid memory size format"))?;
         Ok(num)
     } else {
         // Assume bytes if no suffix
-        let num: usize = size_str.parse()
+        let num: usize = size_str
+            .parse()
             .map_err(|_| NovaError::config("Invalid memory size format"))?;
         Ok(num)
     }

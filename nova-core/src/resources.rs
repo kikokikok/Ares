@@ -1,25 +1,25 @@
+use crate::config::parse_memory_size;
+use crate::error::{NovaError, NovaResult};
+use crate::protocol::{resources as proto_resources, ProtoSerialize};
 use std::any::Any;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
-use crate::config::parse_memory_size;
-use crate::error::{NovaError, NovaResult};
-use crate::protocol::{ProtoSerialize, resources as proto_resources};
 
 /// Resource trait that all resources must implement
 /// Now using high-performance protobuf serialization for blazing fast performance
 pub trait Resource: Send + Sync + 'static {
     /// Resource type name
     fn resource_type(&self) -> &'static str;
-    
+
     /// Resource size in bytes
     fn size(&self) -> usize;
-    
+
     /// Serialize resource data using high-performance protobuf
     fn serialize(&self) -> NovaResult<Vec<u8>>;
-    
+
     /// Deserialize resource data using high-performance protobuf
     fn deserialize(data: &[u8]) -> NovaResult<Self>
     where
@@ -40,7 +40,7 @@ impl<T> ResourceHandle<T> {
             _phantom: std::marker::PhantomData,
         }
     }
-    
+
     pub fn id(&self) -> Uuid {
         self.id
     }
@@ -92,7 +92,7 @@ impl ResourceManager {
     /// Create a new resource manager
     pub fn new(max_memory_str: &str, gc_threshold: f32) -> NovaResult<Self> {
         let max_memory = parse_memory_size(max_memory_str)?;
-        
+
         Ok(Self {
             resources: Arc::new(RwLock::new(HashMap::new())),
             loaders: Arc::new(RwLock::new(HashMap::new())),
@@ -109,7 +109,7 @@ impl ResourceManager {
             cache: Arc::new(RwLock::new(HashMap::new())),
         })
     }
-    
+
     /// Register a resource loader
     pub async fn register_loader<T, L>(&self, extension: &str, loader: L)
     where
@@ -120,7 +120,7 @@ impl ResourceManager {
         loaders.insert(extension.to_lowercase(), Box::new(loader));
         log::debug!("Registered resource loader for extension: {}", extension);
     }
-    
+
     /// Load a resource from file
     pub async fn load_resource<T: Resource>(&self, path: &Path) -> NovaResult<ResourceHandle<T>> {
         // Check cache first
@@ -132,28 +132,31 @@ impl ResourceManager {
                 return Ok(ResourceHandle::new(resource_id));
             }
         }
-        
+
         // Get file extension
-        let extension = path.extension()
+        let extension = path
+            .extension()
             .and_then(|ext| ext.to_str())
             .ok_or_else(|| NovaError::resource("No file extension found"))?
             .to_lowercase();
-        
+
         // Find appropriate loader
         let loaders = self.loaders.read().await;
-        let loader_any = loaders.get(&extension)
-            .ok_or_else(|| NovaError::resource(format!("No loader registered for extension: {}", extension)))?;
-        
-        let loader = loader_any.downcast_ref::<Box<dyn ResourceLoader<T>>>()
+        let loader_any = loaders.get(&extension).ok_or_else(|| {
+            NovaError::resource(format!("No loader registered for extension: {}", extension))
+        })?;
+
+        let loader = loader_any
+            .downcast_ref::<Box<dyn ResourceLoader<T>>>()
             .ok_or_else(|| NovaError::resource("Loader type mismatch"))?;
-        
+
         // Load the resource
         let resource = loader.load(path)?;
         let resource_size = resource.size();
-        
+
         // Check memory limits
         self.check_memory_limits(resource_size).await?;
-        
+
         let resource_id = Uuid::new_v4();
         let entry = ResourceEntry {
             resource: Arc::new(resource),
@@ -163,19 +166,19 @@ impl ResourceManager {
             last_accessed: std::time::Instant::now(),
             dependencies: Vec::new(),
         };
-        
+
         // Store resource
         {
             let mut resources = self.resources.write().await;
             resources.insert(resource_id, entry);
         }
-        
+
         // Update cache
         {
             let mut cache = self.cache.write().await;
             cache.insert(path.to_path_buf(), resource_id);
         }
-        
+
         // Update statistics
         {
             let mut stats = self.stats.write().await;
@@ -183,16 +186,20 @@ impl ResourceManager {
             stats.resource_count += 1;
             stats.cache_misses += 1;
         }
-        
-        log::debug!("Loaded resource: {:?} (size: {} bytes)", path, resource_size);
+
+        log::debug!(
+            "Loaded resource: {:?} (size: {} bytes)",
+            path,
+            resource_size
+        );
         Ok(ResourceHandle::new(resource_id))
     }
-    
+
     /// Create a resource directly
     pub async fn create_resource<T: Resource>(&self, resource: T) -> NovaResult<ResourceHandle<T>> {
         let resource_size = resource.size();
         self.check_memory_limits(resource_size).await?;
-        
+
         let resource_id = Uuid::new_v4();
         let entry = ResourceEntry {
             resource: Arc::new(resource),
@@ -202,121 +209,137 @@ impl ResourceManager {
             last_accessed: std::time::Instant::now(),
             dependencies: Vec::new(),
         };
-        
+
         {
             let mut resources = self.resources.write().await;
             resources.insert(resource_id, entry);
         }
-        
+
         {
             let mut stats = self.stats.write().await;
             stats.total_used += resource_size;
             stats.resource_count += 1;
         }
-        
-        log::debug!("Created resource with ID: {} (size: {} bytes)", resource_id, resource_size);
+
+        log::debug!(
+            "Created resource with ID: {} (size: {} bytes)",
+            resource_id,
+            resource_size
+        );
         Ok(ResourceHandle::new(resource_id))
     }
-    
+
     /// Get a resource by handle
-    pub async fn get_resource<T: Resource>(&self, handle: &ResourceHandle<T>) -> NovaResult<Arc<T>> {
+    pub async fn get_resource<T: Resource>(
+        &self,
+        handle: &ResourceHandle<T>,
+    ) -> NovaResult<Arc<T>> {
         let mut resources = self.resources.write().await;
-        
+
         if let Some(entry) = resources.get_mut(&handle.id) {
             entry.last_accessed = std::time::Instant::now();
             entry.ref_count += 1;
-            
+
             // Safe downcasting with Arc
             let resource_arc = entry.resource.clone();
-            let resource = resource_arc.downcast::<T>()
+            let resource = resource_arc
+                .downcast::<T>()
                 .map_err(|_| NovaError::resource("Resource type mismatch"))?;
-            
+
             Ok(resource)
         } else {
             Err(NovaError::resource("Resource not found"))
         }
     }
-    
+
     /// Unload a resource
     pub async fn unload_resource<T>(&self, handle: ResourceHandle<T>) -> NovaResult<()> {
         let mut resources = self.resources.write().await;
-        
+
         if let Some(entry) = resources.get_mut(&handle.id) {
             entry.ref_count = entry.ref_count.saturating_sub(1);
-            
+
             if entry.ref_count == 0 {
                 let size = entry.size;
                 resources.remove(&handle.id);
-                
+
                 // Update statistics
                 let mut stats = self.stats.write().await;
                 stats.total_used -= size;
                 stats.resource_count -= 1;
-                
+
                 log::debug!("Unloaded resource: {}", handle.id);
             }
-            
+
             Ok(())
         } else {
             Err(NovaError::resource("Resource not found"))
         }
     }
-    
+
     /// Run garbage collection
     pub async fn garbage_collect(&self) -> NovaResult<()> {
         let mut resources = self.resources.write().await;
         let mut cache = self.cache.write().await;
         let current_time = std::time::Instant::now();
-        
+
         let mut to_remove = Vec::new();
         let mut freed_memory = 0;
-        
+
         for (id, entry) in resources.iter() {
             // Remove resources that haven't been accessed in a while and have no references
-            if entry.ref_count == 0 && current_time.duration_since(entry.last_accessed).as_secs() > 60 {
+            if entry.ref_count == 0
+                && current_time.duration_since(entry.last_accessed).as_secs() > 60
+            {
                 to_remove.push(*id);
                 freed_memory += entry.size;
             }
         }
-        
+
         let removed_count = to_remove.len();
-        
+
         for id in to_remove {
             resources.remove(&id);
-            
+
             // Remove from cache as well
             cache.retain(|_, &mut cached_id| cached_id != id);
         }
-        
+
         if freed_memory > 0 {
             let mut stats = self.stats.write().await;
             stats.total_used -= freed_memory;
             stats.resource_count = resources.len();
             stats.gc_runs += 1;
-            
-            log::info!("Garbage collection freed {} bytes, {} resources removed", 
-                      freed_memory, removed_count);
+
+            log::info!(
+                "Garbage collection freed {} bytes, {} resources removed",
+                freed_memory,
+                removed_count
+            );
         }
-        
+
         Ok(())
     }
-    
+
     /// Get memory statistics
     pub async fn get_memory_stats(&self) -> MemoryStats {
         self.stats.read().await.clone()
     }
-    
+
     /// Check if we're approaching memory limits and trigger GC if needed
     async fn check_memory_limits(&self, additional_size: usize) -> NovaResult<()> {
         let stats = self.stats.read().await;
         let projected_usage = stats.total_used + additional_size;
         let usage_ratio = projected_usage as f32 / self.max_memory as f32;
-        
+
         if usage_ratio > self.gc_threshold {
             drop(stats); // Release the lock before GC
-            log::warn!("Memory usage at {:.1}%, triggering garbage collection", usage_ratio * 100.0);
+            log::warn!(
+                "Memory usage at {:.1}%, triggering garbage collection",
+                usage_ratio * 100.0
+            );
             self.garbage_collect().await?;
-            
+
             // Check again after GC
             let stats = self.stats.read().await;
             let new_projected_usage = stats.total_used + additional_size;
@@ -324,7 +347,7 @@ impl ResourceManager {
                 return Err(NovaError::resource("Out of memory"));
             }
         }
-        
+
         Ok(())
     }
 }
@@ -341,7 +364,7 @@ pub struct TextureResource {
 
 impl ProtoSerialize for TextureResource {
     type Proto = proto_resources::TextureResource;
-    
+
     fn to_proto(&self) -> Self::Proto {
         // Convert to protobuf format for optimal wire performance
         let format = match self.format.as_str() {
@@ -354,7 +377,7 @@ impl ProtoSerialize for TextureResource {
             "BC7" => proto_resources::TextureFormat::Bc7,
             _ => proto_resources::TextureFormat::Unspecified,
         };
-        
+
         proto_resources::TextureResource {
             width: self.width,
             height: self.height,
@@ -374,7 +397,7 @@ impl ProtoSerialize for TextureResource {
             }),
         }
     }
-    
+
     fn from_proto(proto: Self::Proto) -> NovaResult<Self> {
         use std::convert::TryFrom;
         let format = match proto_resources::TextureFormat::try_from(proto.format) {
@@ -386,14 +409,15 @@ impl ProtoSerialize for TextureResource {
             Ok(proto_resources::TextureFormat::Dxt5) => "DXT5",
             Ok(proto_resources::TextureFormat::Bc7) => "BC7",
             _ => "RGBA8", // Default fallback
-        }.to_string();
-        
+        }
+        .to_string();
+
         let data = if let Some(texture_data) = proto.data.first() {
             texture_data.data.clone()
         } else {
             vec![]
         };
-        
+
         Ok(TextureResource {
             width: proto.width,
             height: proto.height,
@@ -407,16 +431,16 @@ impl Resource for TextureResource {
     fn resource_type(&self) -> &'static str {
         "Texture"
     }
-    
+
     fn size(&self) -> usize {
         self.data.len() + std::mem::size_of::<Self>()
     }
-    
+
     fn serialize(&self) -> NovaResult<Vec<u8>> {
         // Use protobuf for blazing fast serialization
         self.serialize_proto()
     }
-    
+
     fn deserialize(data: &[u8]) -> NovaResult<Self> {
         // Use protobuf for blazing fast deserialization
         Self::deserialize_proto(data)
@@ -432,14 +456,14 @@ pub struct AudioResource {
 
 impl ProtoSerialize for AudioResource {
     type Proto = proto_resources::AudioResource;
-    
+
     fn to_proto(&self) -> Self::Proto {
         // Convert samples to bytes for efficient wire transfer
         let mut sample_bytes = Vec::with_capacity(self.samples.len() * 4);
         for sample in &self.samples {
             sample_bytes.extend_from_slice(&sample.to_le_bytes());
         }
-        
+
         proto_resources::AudioResource {
             format: proto_resources::AudioFormat::Wav as i32,
             sample_rate: self.sample_rate,
@@ -450,7 +474,7 @@ impl ProtoSerialize for AudioResource {
             is_looping: false,
         }
     }
-    
+
     fn from_proto(proto: Self::Proto) -> NovaResult<Self> {
         // Convert bytes back to f32 samples
         let mut samples = Vec::with_capacity(proto.data.len() / 4);
@@ -460,7 +484,7 @@ impl ProtoSerialize for AudioResource {
                 samples.push(sample);
             }
         }
-        
+
         Ok(AudioResource {
             sample_rate: proto.sample_rate,
             channels: proto.channels as u16,
@@ -473,16 +497,16 @@ impl Resource for AudioResource {
     fn resource_type(&self) -> &'static str {
         "Audio"
     }
-    
+
     fn size(&self) -> usize {
         self.samples.len() * std::mem::size_of::<f32>() + std::mem::size_of::<Self>()
     }
-    
+
     fn serialize(&self) -> NovaResult<Vec<u8>> {
         // Use protobuf for blazing fast serialization
         self.serialize_proto()
     }
-    
+
     fn deserialize(data: &[u8]) -> NovaResult<Self> {
         // Use protobuf for blazing fast deserialization
         Self::deserialize_proto(data)
@@ -494,18 +518,18 @@ pub struct TextureLoader;
 
 impl ResourceLoader<TextureResource> for TextureLoader {
     fn load(&self, path: &Path) -> NovaResult<TextureResource> {
-        // Simplified texture loading - in a real implementation, 
+        // Simplified texture loading - in a real implementation,
         // this would use an image loading library
         let data = std::fs::read(path)?;
-        
+
         Ok(TextureResource {
-            width: 256,  // Placeholder values
+            width: 256, // Placeholder values
             height: 256,
             data,
             format: "RGBA8".to_string(),
         })
     }
-    
+
     fn can_load(&self, path: &Path) -> bool {
         if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
             matches!(ext.to_lowercase().as_str(), "png" | "jpg" | "jpeg" | "bmp")

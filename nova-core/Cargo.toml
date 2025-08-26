@@ -21,7 +21,7 @@ rayon = { workspace = true }
 dashmap = { workspace = true }
 async-trait = { workspace = true }
 futures = { workspace = true }
-num_cpus = "1.16"
+num_cpus = "1.17"
 prost = { workspace = true }
 prost-types = { workspace = true }
 bytes = { workspace = true }

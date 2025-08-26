@@ -1,15 +1,17 @@
-use nova_core::*;
-use nova_core::config::{EngineSettings, MemoryConfig, ThreadingConfig, EventConfig, PluginConfig as ConfigPluginConfig};
-use nova_core::resources::TextureResource;
-use nova_core::threading::{ComputeTask, TaskPriority, Task};
-use nova_core::events::{SimpleEventHandler, EngineStartEvent};
+use nova_core::config::{
+    EngineSettings, EventConfig, MemoryConfig, PluginConfig as ConfigPluginConfig, ThreadingConfig,
+};
 use nova_core::engine::EngineBuilder;
+use nova_core::events::{EngineStartEvent, SimpleEventHandler};
+use nova_core::resources::TextureResource;
+use nova_core::threading::{ComputeTask, Task, TaskPriority};
+use nova_core::*;
 use std::time::Duration;
 
 #[tokio::test]
 async fn test_engine_creation() {
     env_logger::init();
-    
+
     let engine = NovaEngine::new().await;
     assert!(engine.is_ok());
 }
@@ -43,7 +45,7 @@ async fn test_engine_with_custom_config() {
             disabled: vec![],
         },
     };
-    
+
     let engine = NovaEngine::with_config(config).await;
     assert!(engine.is_ok());
 }
@@ -51,7 +53,7 @@ async fn test_engine_with_custom_config() {
 #[tokio::test]
 async fn test_resource_manager() {
     let resource_manager = ResourceManager::new("100MB", 0.8).unwrap();
-    
+
     // Test creating a resource
     let texture = TextureResource {
         width: 256,
@@ -59,10 +61,10 @@ async fn test_resource_manager() {
         data: vec![0u8; 256 * 256 * 4],
         format: "RGBA8".to_string(),
     };
-    
+
     let handle = resource_manager.create_resource(texture).await.unwrap();
     assert!(resource_manager.get_resource(&handle).await.is_ok());
-    
+
     // Test memory stats
     let stats = resource_manager.get_memory_stats().await;
     assert!(stats.resource_count > 0);
@@ -72,23 +74,23 @@ async fn test_resource_manager() {
 #[tokio::test]
 async fn test_event_system() {
     let event_system = EventSystem::new(1000, 5);
-    
+
     // Register an event handler
     let handler = SimpleEventHandler::new(|_event: &EngineStartEvent| {
         println!("Engine started!");
         Ok(())
     });
-    
+
     let handler_id = event_system.register_handler(handler);
-    
+
     // Dispatch an event
     let result = event_system.dispatch(EngineStartEvent);
     assert!(result.is_ok());
-    
+
     // Process events
     let result = event_system.process_events();
     assert!(result.is_ok());
-    
+
     // Unregister handler
     let result = event_system.unregister_handler(handler_id);
     assert!(result.is_ok());
@@ -97,20 +99,18 @@ async fn test_event_system() {
 #[tokio::test]
 async fn test_thread_engine() {
     let thread_engine = ThreadEngine::new(2, None).unwrap();
-    
+
     // Submit a simple task
-    let _task_id = thread_engine.submit_function(
-        "test_task".to_string(),
-        TaskPriority::Normal,
-        || {
+    let _task_id = thread_engine
+        .submit_function("test_task".to_string(), TaskPriority::Normal, || {
             println!("Task executed!");
             Ok(())
-        }
-    ).unwrap();
-    
+        })
+        .unwrap();
+
     // Wait a bit for task execution
     tokio::time::sleep(Duration::from_millis(100)).await;
-    
+
     let stats = thread_engine.get_stats();
     assert!(stats.total_tasks_submitted > 0);
 }
@@ -123,7 +123,7 @@ async fn test_plugin_manager() {
         false,
         "1.0.0".to_string(),
     );
-    
+
     // Test plugin list (should be empty initially)
     let plugins = plugin_manager.list_plugins().await;
     assert!(plugins.is_empty());
@@ -139,7 +139,7 @@ async fn test_engine_builder() {
         .debug(true)
         .build()
         .await;
-    
+
     assert!(engine.is_ok());
     let engine = engine.unwrap();
     assert_eq!(engine.config().engine.name, "Test Engine");
@@ -148,18 +148,18 @@ async fn test_engine_builder() {
 #[tokio::test]
 async fn test_config_validation() {
     let mut config = EngineConfig::default();
-    
+
     // Valid config should pass
     assert!(config.validate().is_ok());
-    
+
     // Invalid configs should fail
     config.memory.pool_count = 0;
     assert!(config.validate().is_err());
-    
+
     config.memory.pool_count = 8;
     config.memory.gc_threshold = 1.5;
     assert!(config.validate().is_err());
-    
+
     config.memory.gc_threshold = 0.8;
     config.threading.worker_threads = 0;
     assert!(config.validate().is_err());
@@ -168,13 +168,13 @@ async fn test_config_validation() {
 #[tokio::test]
 async fn test_memory_size_parsing() {
     use nova_core::config::parse_memory_size;
-    
+
     assert_eq!(parse_memory_size("1GB").unwrap(), 1024 * 1024 * 1024);
     assert_eq!(parse_memory_size("512MB").unwrap(), 512 * 1024 * 1024);
     assert_eq!(parse_memory_size("256KB").unwrap(), 256 * 1024);
     assert_eq!(parse_memory_size("1024B").unwrap(), 1024);
     assert_eq!(parse_memory_size("1024").unwrap(), 1024);
-    
+
     assert!(parse_memory_size("invalid").is_err());
 }
 
@@ -186,10 +186,10 @@ async fn test_resource_serialization() {
         data: vec![255u8; 128 * 128 * 4],
         format: "RGBA8".to_string(),
     };
-    
+
     let serialized = texture.serialize().unwrap();
     let deserialized = TextureResource::deserialize(&serialized).unwrap();
-    
+
     assert_eq!(texture.width, deserialized.width);
     assert_eq!(texture.height, deserialized.height);
     assert_eq!(texture.format, deserialized.format);
@@ -199,8 +199,8 @@ async fn test_resource_serialization() {
 #[tokio::test]
 async fn test_task_priority_ordering() {
     let task_low = ComputeTask::new("low".to_string(), 100);
-    let task_high = ComputeTask::new("high".to_string(), 100);
-    
+    let _task_high = ComputeTask::new("high".to_string(), 100);
+
     assert_eq!(task_low.priority(), TaskPriority::Normal);
     assert!(TaskPriority::High > TaskPriority::Normal);
     assert!(TaskPriority::Critical > TaskPriority::High);

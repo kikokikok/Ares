@@ -1,16 +1,15 @@
+use bytes::BytesMut;
+use log::{debug, error, info, warn};
+use nova_core::protocol;
+use nova_core::{EngineConfig, NovaEngine, NovaError, NovaProtocol, NovaResult};
+use prost::Message;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use std::io::Cursor;
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use serde::{Deserialize, Serialize};
-use log::{info, warn, error, debug};
-use nova_core::{NovaEngine, EngineConfig, NovaResult, NovaError, NovaProtocol};
-use nova_core::protocol;
-use prost::Message;
-use bytes::{Bytes, BytesMut, Buf, BufMut};
 
 /// Client configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,9 +80,9 @@ impl NovaClient {
     /// Create a new Nova Client
     pub async fn new(config: ClientConfig) -> NovaResult<Self> {
         info!("Initializing Nova Client: {}", config.client.name);
-        
+
         let engine = Arc::new(NovaEngine::with_config(config.engine.clone()).await?);
-        
+
         let client = Self {
             config,
             engine,
@@ -93,11 +92,11 @@ impl NovaClient {
             session_id: None,
             heartbeat_sequence: 0,
         };
-        
+
         info!("Nova Client initialized successfully");
         Ok(client)
     }
-    
+
     /// Create client from configuration file
     pub async fn from_config(config_path: PathBuf, server_address: String) -> NovaResult<Self> {
         let mut config = if config_path.exists() {
@@ -108,66 +107,77 @@ impl NovaClient {
         } else {
             ClientConfig::default()
         };
-        
+
         config.networking.server_address = server_address;
         Self::new(config).await
     }
-    
+
     /// Connect to the server
     pub async fn connect(&self) -> NovaResult<()> {
-        info!("Connecting to server: {}", self.config.networking.server_address);
-        
+        info!(
+            "Connecting to server: {}",
+            self.config.networking.server_address
+        );
+
         *self.status.lock().await = ConnectionStatus::Connecting;
-        
+
         match self.attempt_connection().await {
             Ok(stream) => {
                 *self.connection.lock().await = Some(stream);
                 *self.status.lock().await = ConnectionStatus::Connected;
                 info!("Connected to server successfully");
-                
+
                 // Start the client main loop
                 self.run_client_loop().await?;
-                
+
                 Ok(())
             }
             Err(e) => {
                 *self.status.lock().await = ConnectionStatus::Failed(e.to_string());
                 error!("Failed to connect to server: {}", e);
-                
+
                 if self.config.client.auto_connect {
                     self.handle_reconnection().await?;
                 }
-                
+
                 Err(e)
             }
         }
     }
-    
+
     /// Attempt to establish connection
     async fn attempt_connection(&self) -> NovaResult<TcpStream> {
         let timeout = Duration::from_secs(self.config.networking.connection_timeout);
-        
-        match tokio::time::timeout(timeout, TcpStream::connect(&self.config.networking.server_address)).await {
+
+        match tokio::time::timeout(
+            timeout,
+            TcpStream::connect(&self.config.networking.server_address),
+        )
+        .await
+        {
             Ok(Ok(stream)) => Ok(stream),
-            Ok(Err(e)) => Err(NovaError::Generic(anyhow::anyhow!("Connection failed: {}", e))),
+            Ok(Err(e)) => Err(NovaError::Generic(anyhow::anyhow!(
+                "Connection failed: {}",
+                e
+            ))),
             Err(_) => Err(NovaError::Generic(anyhow::anyhow!("Connection timeout"))),
         }
     }
-    
+
     /// Handle reconnection logic
     async fn handle_reconnection(&self) -> NovaResult<()> {
         let mut attempts = 0;
         let max_attempts = self.config.client.reconnect_attempts;
-        
+
         while attempts < max_attempts {
             attempts += 1;
             *self.status.lock().await = ConnectionStatus::Reconnecting;
-            
+
             warn!("Reconnection attempt {} of {}", attempts, max_attempts);
-            
+
             // Wait before reconnecting
             tokio::time::sleep(Duration::from_secs(2 * attempts as u64)).await;
-            
+
             match self.attempt_connection().await {
                 Ok(stream) => {
                     *self.connection.lock().await = Some(stream);
@@ -180,15 +190,19 @@ impl NovaClient {
                 }
             }
         }
-        
-        *self.status.lock().await = ConnectionStatus::Failed("Max reconnection attempts exceeded".to_string());
-        Err(NovaError::Generic(anyhow::anyhow!("Failed to reconnect after {} attempts", max_attempts)))
+
+        *self.status.lock().await =
+            ConnectionStatus::Failed("Max reconnection attempts exceeded".to_string());
+        Err(NovaError::Generic(anyhow::anyhow!(
+            "Failed to reconnect after {} attempts",
+            max_attempts
+        )))
     }
-    
+
     /// Run the main client loop
     async fn run_client_loop(&self) -> NovaResult<()> {
         info!("Starting client main loop");
-        
+
         // Start the engine
         let engine = self.engine.clone();
         let engine_task = tokio::spawn(async move {
@@ -196,13 +210,13 @@ impl NovaClient {
                 error!("Engine error: {}", e);
             }
         });
-        
+
         // Start heartbeat task
         let heartbeat_task = self.start_heartbeat();
-        
+
         // Start message handling task
         let message_task = self.start_message_handler();
-        
+
         // Wait for any task to complete or fail
         tokio::select! {
             result = engine_task => {
@@ -221,55 +235,62 @@ impl NovaClient {
                 }
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Start heartbeat task
     async fn start_heartbeat(&self) -> NovaResult<()> {
         let interval = Duration::from_secs(self.config.networking.heartbeat_interval);
         let mut heartbeat_timer = tokio::time::interval(interval);
-        
+
         loop {
             heartbeat_timer.tick().await;
-            
+
             let status = self.status.lock().await.clone();
             if status != ConnectionStatus::Connected {
                 break;
             }
-            
+
             // Send heartbeat message
             if let Err(e) = self.send_heartbeat().await {
                 warn!("Heartbeat failed: {}", e);
-                *self.status.lock().await = ConnectionStatus::Failed("Heartbeat failed".to_string());
+                *self.status.lock().await =
+                    ConnectionStatus::Failed("Heartbeat failed".to_string());
                 break;
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Send raw data to server (legacy method)
     pub async fn send_data(&self, data: &[u8]) -> NovaResult<()> {
         if data.len() > self.config.networking.max_packet_size {
             return Err(NovaError::Generic(anyhow::anyhow!("Packet too large")));
         }
-        
+
         let status = self.status.lock().await.clone();
         if status != ConnectionStatus::Connected {
-            return Err(NovaError::Generic(anyhow::anyhow!("Not connected to server")));
+            return Err(NovaError::Generic(anyhow::anyhow!(
+                "Not connected to server"
+            )));
         }
-        
+
         if let Some(ref mut stream) = *self.connection.lock().await {
-            stream.write_all(data).await
+            stream
+                .write_all(data)
+                .await
                 .map_err(|e| NovaError::Generic(anyhow::anyhow!("Failed to send data: {}", e)))?;
             log::trace!("Sending {} bytes to server", data.len());
             Ok(())
         } else {
-            Err(NovaError::Generic(anyhow::anyhow!("No connection to server")))
+            Err(NovaError::Generic(anyhow::anyhow!(
+                "No connection to server"
+            )))
         }
     }
-    
+
     /// Start message handler task
     async fn start_message_handler(&self) -> NovaResult<()> {
         // This would handle incoming messages from the server
@@ -279,68 +300,74 @@ impl NovaClient {
             if status != ConnectionStatus::Connected {
                 break;
             }
-            
+
             // Simulate message processing
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        
+
         Ok(())
     }
-    
+
     /// Disconnect from server
     pub async fn disconnect(&self) -> NovaResult<()> {
         info!("Disconnecting from server");
-        
+
         *self.connection.lock().await = None;
         *self.status.lock().await = ConnectionStatus::Disconnected;
-        
+
         // Shutdown the engine
         self.engine.shutdown().await?;
-        
+
         info!("Disconnected from server");
         Ok(())
     }
-    
+
     /// Get connection status
     pub async fn status(&self) -> ConnectionStatus {
         self.status.lock().await.clone()
     }
-    
+
     /// Get client configuration
     pub fn config(&self) -> &ClientConfig {
         &self.config
     }
-    
+
     /// Get engine instance
     pub fn engine(&self) -> &Arc<NovaEngine> {
         &self.engine
     }
-    
+
     /// Send protobuf message to server with blazing fast performance
     pub async fn send_proto<T: Message>(&self, message: &T) -> NovaResult<()> {
         let encoded = self.protocol.encode(message)?;
         self.send_data(&encoded).await
     }
-    
+
     /// Send packet to server using optimized protocol
     pub async fn send_packet(&self, packet: &protocol::Packet) -> NovaResult<()> {
         let encoded = self.protocol.encode_packet(packet)?;
-        
+
         let status = self.status.lock().await.clone();
         if status != ConnectionStatus::Connected {
-            return Err(NovaError::Generic(anyhow::anyhow!("Not connected to server")));
+            return Err(NovaError::Generic(anyhow::anyhow!(
+                "Not connected to server"
+            )));
         }
-        
+
         if let Some(ref mut stream) = *self.connection.lock().await {
-            stream.write_all(&encoded).await
+            stream
+                .write_all(&encoded)
+                .await
                 .map_err(|e| NovaError::Generic(anyhow::anyhow!("Failed to send packet: {}", e)))?;
             log::trace!("Sent packet ({} bytes) to server", encoded.len());
             Ok(())
         } else {
-            Err(NovaError::Generic(anyhow::anyhow!("No connection to server")))
+            Err(NovaError::Generic(anyhow::anyhow!(
+                "No connection to server"
+            )))
         }
     }
-    
+
     /// Send handshake to server
     pub async fn send_handshake(&self, player_name: String) -> NovaResult<()> {
         let capabilities = protocol::ClientCapabilities {
@@ -348,27 +375,23 @@ impl NovaClient {
             supported_protocols: vec!["nova-v1".to_string()],
             max_packet_size: 1024 * 1024, // 1MB
         };
-        
-        let packet = NovaProtocol::create_handshake(
-            "1.0.0".to_string(),
-            player_name,
-            capabilities,
-        );
-        
+
+        let packet = NovaProtocol::create_handshake("1.0.0".to_string(), player_name, capabilities);
+
         self.send_packet(&packet).await
     }
-    
+
     /// Send heartbeat to server
     pub async fn send_heartbeat(&self) -> NovaResult<()> {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
-        
+
         let packet = NovaProtocol::create_heartbeat(timestamp, self.heartbeat_sequence);
         self.send_packet(&packet).await
     }
-    
+
     /// Process incoming packet from server
     async fn process_packet(&mut self, packet: protocol::Packet) -> NovaResult<()> {
         match protocol::PacketType::try_from(packet.r#type) {
@@ -382,7 +405,7 @@ impl NovaClient {
                         .unwrap()
                         .as_millis() as u64,
                 };
-                
+
                 let response_packet = protocol::Packet {
                     id: uuid::Uuid::new_v4().as_u128() as u64,
                     timestamp: heartbeat_response.server_time,
@@ -394,16 +417,20 @@ impl NovaClient {
                     },
                     compression: None,
                 };
-                
+
                 self.send_packet(&response_packet).await?;
                 debug!("Responded to heartbeat from server");
             }
             Ok(protocol::PacketType::Handshake) => {
                 // Handle handshake response
-                let response: protocol::HandshakeResponse = self.protocol.extract_payload(&packet)?;
+                let response: protocol::HandshakeResponse =
+                    self.protocol.extract_payload(&packet)?;
                 if response.accepted {
                     self.session_id = Some(response.session_id);
-                    info!("Handshake accepted by server, session: {:?}", self.session_id);
+                    info!(
+                        "Handshake accepted by server, session: {:?}",
+                        self.session_id
+                    );
                 } else {
                     warn!("Handshake rejected: {:?}", response.error_message);
                 }
@@ -416,14 +443,17 @@ impl NovaClient {
             Ok(protocol::PacketType::Disconnect) => {
                 // Handle disconnect
                 let disconnect: protocol::Disconnect = self.protocol.extract_payload(&packet)?;
-                warn!("Server disconnect: {:?} - {:?}", disconnect.reason, disconnect.message);
+                warn!(
+                    "Server disconnect: {:?} - {:?}",
+                    disconnect.reason, disconnect.message
+                );
                 *self.status.lock().await = ConnectionStatus::Disconnected;
             }
             _ => {
                 debug!("Unhandled packet type: {}", packet.r#type);
             }
         }
-        
+
         Ok(())
     }
 }

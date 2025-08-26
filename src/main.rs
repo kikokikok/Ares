@@ -82,10 +82,10 @@ enum PluginCommands {
 #[tokio::main]
 async fn main() {
     env_logger::init();
-    
+
     let cli = Cli::parse();
     let handler = CliHandler::new();
-    
+
     let result = match cli.command {
         Commands::Run { config, verbose } => {
             if verbose {
@@ -93,29 +93,21 @@ async fn main() {
             }
             handler.run_engine(config).await
         }
-        Commands::Server { config, port } => {
-            handler.start_server(config, port).await
-        }
-        Commands::Client { config, server } => {
-            handler.start_client(config, server).await
-        }
-        Commands::New { name, path } => {
-            handler.create_project(name, path).await
-        }
-        Commands::Plugin { command } => {
-            match command {
-                PluginCommands::List => handler.list_plugins().await,
-                PluginCommands::Install { plugin } => handler.install_plugin(plugin).await,
-                PluginCommands::Uninstall { plugin } => handler.uninstall_plugin(plugin).await,
-                PluginCommands::New { name } => handler.create_plugin(name).await,
-            }
-        }
+        Commands::Server { config, port } => handler.start_server(config, port).await,
+        Commands::Client { config, server } => handler.start_client(config, server).await,
+        Commands::New { name, path } => handler.create_project(name, path).await,
+        Commands::Plugin { command } => match command {
+            PluginCommands::List => handler.list_plugins().await,
+            PluginCommands::Install { plugin } => handler.install_plugin(plugin).await,
+            PluginCommands::Uninstall { plugin } => handler.uninstall_plugin(plugin).await,
+            PluginCommands::New { name } => handler.create_plugin(name).await,
+        },
     };
-    
+
     if let Err(e) = result {
         error!("Error: {}", e);
         std::process::exit(1);
     }
-    
+
     info!("Nova Core Engine completed successfully");
 }

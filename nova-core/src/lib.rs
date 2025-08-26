@@ -1,5 +1,5 @@
 //! Nova Core Engine
-//! 
+//!
 //! A high-performance modular game engine designed for real-time applications
 //! requiring sophisticated resource management and extensible plugin capabilities.
 
