@@ -139,7 +139,7 @@ impl NovaEngine {
             
             // Run garbage collection periodically
             if frame_count % (target_fps as u64 * 30) == 0 {
-                if let Err(e) = self.resource_manager.garbage_collect() {
+                if let Err(e) = self.resource_manager.garbage_collect().await {
                     warn!("Garbage collection failed: {}", e);
                 }
             }
@@ -183,32 +183,39 @@ impl NovaEngine {
         let uptime = self.start_time.elapsed();
         let fps = 1.0 / delta_time;
         
-        let memory_stats = self.resource_manager.get_memory_stats();
-        let threading_stats = self.thread_engine.get_stats();
-        let event_stats = self.event_system.get_stats();
+        // Use tokio::spawn to handle the async call
+        let resource_manager = self.resource_manager.clone();
+        let thread_engine = self.thread_engine.clone();
+        let event_system = self.event_system.clone();
         
-        info!(
-            "Performance Stats - Frame: {}, FPS: {:.1}, Uptime: {:.1}s",
-            frame_count, fps, uptime.as_secs_f64()
-        );
-        info!(
-            "Memory: {:.1}MB used / {:.1}MB total, Resources: {}",
-            memory_stats.total_used as f64 / 1024.0 / 1024.0,
-            memory_stats.total_allocated as f64 / 1024.0 / 1024.0,
-            memory_stats.resource_count
-        );
-        info!(
-            "Threading: {} tasks submitted, {} completed, {} pending",
-            threading_stats.total_tasks_submitted,
-            threading_stats.total_tasks_completed,
-            threading_stats.pending_tasks
-        );
-        info!(
-            "Events: {} dispatched, {} handled, avg dispatch: {:.1}μs",
-            event_stats.events_dispatched,
-            event_stats.events_handled,
-            event_stats.avg_dispatch_time_us
-        );
+        tokio::spawn(async move {
+            let memory_stats = resource_manager.get_memory_stats().await;
+            let threading_stats = thread_engine.get_stats();
+            let event_stats = event_system.get_stats();
+            
+            log::info!(
+                "Performance Stats - Frame: {}, FPS: {:.1}, Uptime: {:.1}s",
+                frame_count, fps, uptime.as_secs_f64()
+            );
+            log::info!(
+                "Memory: {:.1}MB used / {:.1}MB total, Resources: {}",
+                memory_stats.total_used as f64 / 1024.0 / 1024.0,
+                memory_stats.total_allocated as f64 / 1024.0 / 1024.0,
+                memory_stats.resource_count
+            );
+            log::info!(
+                "Threading: {} tasks submitted, {} completed, {} pending",
+                threading_stats.total_tasks_submitted,
+                threading_stats.total_tasks_completed,
+                threading_stats.pending_tasks
+            );
+            log::info!(
+                "Events: {} dispatched, {} handled, avg dispatch: {:.1}μs",
+                event_stats.events_dispatched,
+                event_stats.events_handled,
+                event_stats.avg_dispatch_time_us
+            );
+        });
     }
     
     /// Stop the engine
@@ -261,7 +268,8 @@ impl NovaEngine {
         // Stop plugins
         {
             let plugin_manager = self.plugin_manager.lock().await;
-            for plugin_name in plugin_manager.list_plugins() {
+            let plugin_names = plugin_manager.list_plugins().await;
+            for plugin_name in plugin_names {
                 if let Err(e) = plugin_manager.stop_plugin(&plugin_name).await {
                     error!("Failed to stop plugin {}: {}", plugin_name, e);
                 }
@@ -275,7 +283,7 @@ impl NovaEngine {
         self.event_system.clear();
         
         // Run final garbage collection
-        self.resource_manager.garbage_collect()?;
+        self.resource_manager.garbage_collect().await?;
         
         let total_uptime = self.uptime();
         info!("Nova Core Engine shutdown complete (uptime: {:.1}s)", total_uptime.as_secs_f64());

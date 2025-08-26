@@ -21,6 +21,3 @@ dashmap = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
 bytes = { workspace = true }
-
-[build-dependencies]
-prost-build = { workspace = true }

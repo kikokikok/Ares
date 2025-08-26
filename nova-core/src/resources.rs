@@ -122,12 +122,12 @@ impl ResourceManager {
     }
     
     /// Load a resource from file
-    pub fn load_resource<T: Resource>(&self, path: &Path) -> NovaResult<ResourceHandle<T>> {
+    pub async fn load_resource<T: Resource>(&self, path: &Path) -> NovaResult<ResourceHandle<T>> {
         // Check cache first
         {
-            let cache = self.cache.read();
+            let cache = self.cache.read().await;
             if let Some(&resource_id) = cache.get(path) {
-                let mut stats = self.stats.write();
+                let mut stats = self.stats.write().await;
                 stats.cache_hits += 1;
                 return Ok(ResourceHandle::new(resource_id));
             }
@@ -140,7 +140,7 @@ impl ResourceManager {
             .to_lowercase();
         
         // Find appropriate loader
-        let loaders = self.loaders.read();
+        let loaders = self.loaders.read().await;
         let loader_any = loaders.get(&extension)
             .ok_or_else(|| NovaError::resource(format!("No loader registered for extension: {}", extension)))?;
         
@@ -152,7 +152,7 @@ impl ResourceManager {
         let resource_size = resource.size();
         
         // Check memory limits
-        self.check_memory_limits(resource_size)?;
+        self.check_memory_limits(resource_size).await?;
         
         let resource_id = Uuid::new_v4();
         let entry = ResourceEntry {
@@ -166,19 +166,19 @@ impl ResourceManager {
         
         // Store resource
         {
-            let mut resources = self.resources.write();
+            let mut resources = self.resources.write().await;
             resources.insert(resource_id, entry);
         }
         
         // Update cache
         {
-            let mut cache = self.cache.write();
+            let mut cache = self.cache.write().await;
             cache.insert(path.to_path_buf(), resource_id);
         }
         
         // Update statistics
         {
-            let mut stats = self.stats.write();
+            let mut stats = self.stats.write().await;
             stats.total_used += resource_size;
             stats.resource_count += 1;
             stats.cache_misses += 1;
@@ -189,9 +189,9 @@ impl ResourceManager {
     }
     
     /// Create a resource directly
-    pub fn create_resource<T: Resource>(&self, resource: T) -> NovaResult<ResourceHandle<T>> {
+    pub async fn create_resource<T: Resource>(&self, resource: T) -> NovaResult<ResourceHandle<T>> {
         let resource_size = resource.size();
-        self.check_memory_limits(resource_size)?;
+        self.check_memory_limits(resource_size).await?;
         
         let resource_id = Uuid::new_v4();
         let entry = ResourceEntry {
@@ -204,12 +204,12 @@ impl ResourceManager {
         };
         
         {
-            let mut resources = self.resources.write();
+            let mut resources = self.resources.write().await;
             resources.insert(resource_id, entry);
         }
         
         {
-            let mut stats = self.stats.write();
+            let mut stats = self.stats.write().await;
             stats.total_used += resource_size;
             stats.resource_count += 1;
         }
@@ -219,8 +219,8 @@ impl ResourceManager {
     }
     
     /// Get a resource by handle
-    pub fn get_resource<T: Resource>(&self, handle: &ResourceHandle<T>) -> NovaResult<Arc<T>> {
-        let mut resources = self.resources.write();
+    pub async fn get_resource<T: Resource>(&self, handle: &ResourceHandle<T>) -> NovaResult<Arc<T>> {
+        let mut resources = self.resources.write().await;
         
         if let Some(entry) = resources.get_mut(&handle.id) {
             entry.last_accessed = std::time::Instant::now();
@@ -238,8 +238,8 @@ impl ResourceManager {
     }
     
     /// Unload a resource
-    pub fn unload_resource<T>(&self, handle: ResourceHandle<T>) -> NovaResult<()> {
-        let mut resources = self.resources.write();
+    pub async fn unload_resource<T>(&self, handle: ResourceHandle<T>) -> NovaResult<()> {
+        let mut resources = self.resources.write().await;
         
         if let Some(entry) = resources.get_mut(&handle.id) {
             entry.ref_count = entry.ref_count.saturating_sub(1);
@@ -249,7 +249,7 @@ impl ResourceManager {
                 resources.remove(&handle.id);
                 
                 // Update statistics
-                let mut stats = self.stats.write();
+                let mut stats = self.stats.write().await;
                 stats.total_used -= size;
                 stats.resource_count -= 1;
                 
@@ -263,9 +263,9 @@ impl ResourceManager {
     }
     
     /// Run garbage collection
-    pub fn garbage_collect(&self) -> NovaResult<()> {
-        let mut resources = self.resources.write();
-        let mut cache = self.cache.write();
+    pub async fn garbage_collect(&self) -> NovaResult<()> {
+        let mut resources = self.resources.write().await;
+        let mut cache = self.cache.write().await;
         let current_time = std::time::Instant::now();
         
         let mut to_remove = Vec::new();
@@ -289,7 +289,7 @@ impl ResourceManager {
         }
         
         if freed_memory > 0 {
-            let mut stats = self.stats.write();
+            let mut stats = self.stats.write().await;
             stats.total_used -= freed_memory;
             stats.resource_count = resources.len();
             stats.gc_runs += 1;
@@ -302,23 +302,23 @@ impl ResourceManager {
     }
     
     /// Get memory statistics
-    pub fn get_memory_stats(&self) -> MemoryStats {
-        self.stats.read().clone()
+    pub async fn get_memory_stats(&self) -> MemoryStats {
+        self.stats.read().await.clone()
     }
     
     /// Check if we're approaching memory limits and trigger GC if needed
-    fn check_memory_limits(&self, additional_size: usize) -> NovaResult<()> {
-        let stats = self.stats.read();
+    async fn check_memory_limits(&self, additional_size: usize) -> NovaResult<()> {
+        let stats = self.stats.read().await;
         let projected_usage = stats.total_used + additional_size;
         let usage_ratio = projected_usage as f32 / self.max_memory as f32;
         
         if usage_ratio > self.gc_threshold {
             drop(stats); // Release the lock before GC
             log::warn!("Memory usage at {:.1}%, triggering garbage collection", usage_ratio * 100.0);
-            self.garbage_collect()?;
+            self.garbage_collect().await?;
             
             // Check again after GC
-            let stats = self.stats.read();
+            let stats = self.stats.read().await;
             let new_projected_usage = stats.total_used + additional_size;
             if new_projected_usage > self.max_memory {
                 return Err(NovaError::resource("Out of memory"));
@@ -364,7 +364,7 @@ impl ProtoSerialize for TextureResource {
                 level: 0,
                 width: self.width,
                 height: self.height,
-                data: self.data.clone().into(),
+                data: self.data.clone(),
             }],
             flags: Some(proto_resources::TextureFlags {
                 is_srgb: false,
@@ -389,7 +389,7 @@ impl ProtoSerialize for TextureResource {
         }.to_string();
         
         let data = if let Some(texture_data) = proto.data.first() {
-            texture_data.data.to_vec()
+            texture_data.data.clone()
         } else {
             vec![]
         };
@@ -445,7 +445,7 @@ impl ProtoSerialize for AudioResource {
             sample_rate: self.sample_rate,
             channels: self.channels as u32,
             bit_depth: 32, // f32 samples
-            data: sample_bytes.into(),
+            data: sample_bytes,
             duration: self.samples.len() as f32 / (self.sample_rate * self.channels as u32) as f32,
             is_looping: false,
         }

@@ -125,8 +125,8 @@ impl NovaProtocol {
         protocol::Packet {
             id: uuid::Uuid::new_v4().as_u128() as u64,
             timestamp,
-            r#type: protocol::PacketType::PacketTypeHeartbeat as i32,
-            payload: payload.freeze(),
+            r#type: protocol::PacketType::Heartbeat as i32,
+            payload: payload.freeze().to_vec(),
             compression: None,
         }
     }
@@ -152,8 +152,8 @@ impl NovaProtocol {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_millis() as u64,
-            r#type: protocol::PacketType::PacketTypeHandshake as i32,
-            payload: payload.freeze(),
+            r#type: protocol::PacketType::Handshake as i32,
+            payload: payload.freeze().to_vec(),
             compression: None,
         }
     }
@@ -175,8 +175,8 @@ impl NovaProtocol {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_millis() as u64,
-            r#type: protocol::PacketType::PacketTypeError as i32,
-            payload: payload.freeze(),
+            r#type: protocol::PacketType::Error as i32,
+            payload: payload.freeze().to_vec(),
             compression: None,
         }
     }
@@ -259,7 +259,7 @@ mod tests {
         let large_packet = protocol::Packet {
             id: 1,
             timestamp: 12345,
-            r#type: protocol::PacketType::PacketTypeHeartbeat as i32,
+            r#type: protocol::PacketType::Heartbeat as i32,
             payload: vec![0u8; 200].into(), // Larger than limit
             compression: None,
         };

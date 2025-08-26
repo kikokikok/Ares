@@ -11,15 +11,9 @@ use dashmap::DashMap;
 use uuid::Uuid;
 use log::{info, warn, error, debug};
 use nova_core::{NovaEngine, EngineConfig, NovaResult, NovaError, NovaProtocol};
+use nova_core::protocol;
 use prost::Message;
 use bytes::{Bytes, BytesMut, Buf, BufMut};
-
-// Include generated protobuf code for networking
-pub mod protocol {
-    include!(concat!(env!("OUT_DIR"), "/nova.protocol.rs"));
-}
-
-pub use protocol::*;
 
 /// Server configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -379,7 +373,7 @@ impl NovaServer {
         }
         
         // Trigger engine garbage collection
-        self.engine.resource_manager().garbage_collect()?;
+        self.engine.resource_manager().garbage_collect().await?;
         
         Ok(())
     }
@@ -518,11 +512,11 @@ impl NovaServer {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_millis() as u64,
-            r#type: protocol::PacketType::PacketTypeHandshake as i32,
+            r#type: protocol::PacketType::Handshake as i32,
             payload: {
                 let mut buf = BytesMut::new();
                 response.encode(&mut buf).unwrap();
-                buf.freeze()
+                buf.freeze().to_vec()
             },
             compression: None,
         };

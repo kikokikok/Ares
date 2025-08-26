@@ -6,17 +6,11 @@ use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use serde::{Deserialize, Serialize};
-use log::{info, warn, error};
+use log::{info, warn, error, debug};
 use nova_core::{NovaEngine, EngineConfig, NovaResult, NovaError, NovaProtocol};
+use nova_core::protocol;
 use prost::Message;
 use bytes::{Bytes, BytesMut, Buf, BufMut};
-
-// Include generated protobuf code for networking
-pub mod protocol {
-    include!(concat!(env!("OUT_DIR"), "/nova.protocol.rs"));
-}
-
-pub use protocol::*;
 
 /// Client configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -377,8 +371,8 @@ impl NovaClient {
     
     /// Process incoming packet from server
     async fn process_packet(&mut self, packet: protocol::Packet) -> NovaResult<()> {
-        match protocol::PacketType::from_i32(packet.r#type) {
-            Some(protocol::PacketType::PacketTypeHeartbeat) => {
+        match protocol::PacketType::try_from(packet.r#type) {
+            Ok(protocol::PacketType::Heartbeat) => {
                 // Respond to heartbeat
                 let heartbeat_response = protocol::HeartbeatResponse {
                     timestamp: packet.timestamp,
@@ -392,11 +386,11 @@ impl NovaClient {
                 let response_packet = protocol::Packet {
                     id: uuid::Uuid::new_v4().as_u128() as u64,
                     timestamp: heartbeat_response.server_time,
-                    r#type: protocol::PacketType::PacketTypeHeartbeat as i32,
+                    r#type: protocol::PacketType::Heartbeat as i32,
                     payload: {
                         let mut buf = BytesMut::new();
                         heartbeat_response.encode(&mut buf).unwrap();
-                        buf.freeze()
+                        buf.freeze().to_vec()
                     },
                     compression: None,
                 };
@@ -404,7 +398,7 @@ impl NovaClient {
                 self.send_packet(&response_packet).await?;
                 debug!("Responded to heartbeat from server");
             }
-            Some(protocol::PacketType::PacketTypeHandshake) => {
+            Ok(protocol::PacketType::Handshake) => {
                 // Handle handshake response
                 let response: protocol::HandshakeResponse = self.protocol.extract_payload(&packet)?;
                 if response.accepted {
@@ -414,12 +408,12 @@ impl NovaClient {
                     warn!("Handshake rejected: {:?}", response.error_message);
                 }
             }
-            Some(protocol::PacketType::PacketTypeError) => {
+            Ok(protocol::PacketType::Error) => {
                 // Handle error
                 let error: protocol::Error = self.protocol.extract_payload(&packet)?;
                 error!("Server error: {} - {}", error.code, error.message);
             }
-            Some(protocol::PacketType::PacketTypeDisconnect) => {
+            Ok(protocol::PacketType::Disconnect) => {
                 // Handle disconnect
                 let disconnect: protocol::Disconnect = self.protocol.extract_payload(&packet)?;
                 warn!("Server disconnect: {:?} - {:?}", disconnect.reason, disconnect.message);
