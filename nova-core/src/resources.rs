@@ -6,8 +6,10 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 use crate::config::parse_memory_size;
 use crate::error::{NovaError, NovaResult};
+use crate::protocol::{ProtoSerialize, resources as proto_resources};
 
 /// Resource trait that all resources must implement
+/// Now using high-performance protobuf serialization for blazing fast performance
 pub trait Resource: Send + Sync + 'static {
     /// Resource type name
     fn resource_type(&self) -> &'static str;
@@ -15,10 +17,10 @@ pub trait Resource: Send + Sync + 'static {
     /// Resource size in bytes
     fn size(&self) -> usize;
     
-    /// Serialize resource data
+    /// Serialize resource data using high-performance protobuf
     fn serialize(&self) -> NovaResult<Vec<u8>>;
     
-    /// Deserialize resource data
+    /// Deserialize resource data using high-performance protobuf
     fn deserialize(data: &[u8]) -> NovaResult<Self>
     where
         Self: Sized;
@@ -327,14 +329,78 @@ impl ResourceManager {
     }
 }
 
-// Sample resource implementations
+// High-performance resource implementations using Protocol Buffers
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone)]
 pub struct TextureResource {
     pub width: u32,
     pub height: u32,
     pub data: Vec<u8>,
     pub format: String,
+}
+
+impl ProtoSerialize for TextureResource {
+    type Proto = proto_resources::TextureResource;
+    
+    fn to_proto(&self) -> Self::Proto {
+        // Convert to protobuf format for optimal wire performance
+        let format = match self.format.as_str() {
+            "RGBA8" => proto_resources::TextureFormat::Rgba8,
+            "RGB8" => proto_resources::TextureFormat::Rgb8,
+            "RGBA16F" => proto_resources::TextureFormat::Rgba16f,
+            "RGBA32F" => proto_resources::TextureFormat::Rgba32f,
+            "DXT1" => proto_resources::TextureFormat::Dxt1,
+            "DXT5" => proto_resources::TextureFormat::Dxt5,
+            "BC7" => proto_resources::TextureFormat::Bc7,
+            _ => proto_resources::TextureFormat::Unspecified,
+        };
+        
+        proto_resources::TextureResource {
+            width: self.width,
+            height: self.height,
+            format: format as i32,
+            mip_levels: 1,
+            data: vec![proto_resources::TextureData {
+                level: 0,
+                width: self.width,
+                height: self.height,
+                data: self.data.clone().into(),
+            }],
+            flags: Some(proto_resources::TextureFlags {
+                is_srgb: false,
+                generate_mipmaps: false,
+                is_cubemap: false,
+                is_array: false,
+            }),
+        }
+    }
+    
+    fn from_proto(proto: Self::Proto) -> NovaResult<Self> {
+        use std::convert::TryFrom;
+        let format = match proto_resources::TextureFormat::try_from(proto.format) {
+            Ok(proto_resources::TextureFormat::Rgba8) => "RGBA8",
+            Ok(proto_resources::TextureFormat::Rgb8) => "RGB8",
+            Ok(proto_resources::TextureFormat::Rgba16f) => "RGBA16F",
+            Ok(proto_resources::TextureFormat::Rgba32f) => "RGBA32F",
+            Ok(proto_resources::TextureFormat::Dxt1) => "DXT1",
+            Ok(proto_resources::TextureFormat::Dxt5) => "DXT5",
+            Ok(proto_resources::TextureFormat::Bc7) => "BC7",
+            _ => "RGBA8", // Default fallback
+        }.to_string();
+        
+        let data = if let Some(texture_data) = proto.data.first() {
+            texture_data.data.to_vec()
+        } else {
+            vec![]
+        };
+        
+        Ok(TextureResource {
+            width: proto.width,
+            height: proto.height,
+            data,
+            format,
+        })
+    }
 }
 
 impl Resource for TextureResource {
@@ -347,19 +413,60 @@ impl Resource for TextureResource {
     }
     
     fn serialize(&self) -> NovaResult<Vec<u8>> {
-        serde_json::to_vec(self).map_err(|e| NovaError::resource(format!("Serialization failed: {}", e)))
+        // Use protobuf for blazing fast serialization
+        self.serialize_proto()
     }
     
     fn deserialize(data: &[u8]) -> NovaResult<Self> {
-        serde_json::from_slice(data).map_err(|e| NovaError::resource(format!("Deserialization failed: {}", e)))
+        // Use protobuf for blazing fast deserialization
+        Self::deserialize_proto(data)
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone)]
 pub struct AudioResource {
     pub sample_rate: u32,
     pub channels: u16,
     pub samples: Vec<f32>,
+}
+
+impl ProtoSerialize for AudioResource {
+    type Proto = proto_resources::AudioResource;
+    
+    fn to_proto(&self) -> Self::Proto {
+        // Convert samples to bytes for efficient wire transfer
+        let mut sample_bytes = Vec::with_capacity(self.samples.len() * 4);
+        for sample in &self.samples {
+            sample_bytes.extend_from_slice(&sample.to_le_bytes());
+        }
+        
+        proto_resources::AudioResource {
+            format: proto_resources::AudioFormat::Wav as i32,
+            sample_rate: self.sample_rate,
+            channels: self.channels as u32,
+            bit_depth: 32, // f32 samples
+            data: sample_bytes.into(),
+            duration: self.samples.len() as f32 / (self.sample_rate * self.channels as u32) as f32,
+            is_looping: false,
+        }
+    }
+    
+    fn from_proto(proto: Self::Proto) -> NovaResult<Self> {
+        // Convert bytes back to f32 samples
+        let mut samples = Vec::with_capacity(proto.data.len() / 4);
+        for chunk in proto.data.chunks(4) {
+            if chunk.len() == 4 {
+                let sample = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                samples.push(sample);
+            }
+        }
+        
+        Ok(AudioResource {
+            sample_rate: proto.sample_rate,
+            channels: proto.channels as u16,
+            samples,
+        })
+    }
 }
 
 impl Resource for AudioResource {
@@ -372,11 +479,13 @@ impl Resource for AudioResource {
     }
     
     fn serialize(&self) -> NovaResult<Vec<u8>> {
-        serde_json::to_vec(self).map_err(|e| NovaError::resource(format!("Serialization failed: {}", e)))
+        // Use protobuf for blazing fast serialization
+        self.serialize_proto()
     }
     
     fn deserialize(data: &[u8]) -> NovaResult<Self> {
-        serde_json::from_slice(data).map_err(|e| NovaError::resource(format!("Deserialization failed: {}", e)))
+        // Use protobuf for blazing fast deserialization
+        Self::deserialize_proto(data)
     }
 }
 

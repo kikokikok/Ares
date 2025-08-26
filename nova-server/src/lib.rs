@@ -2,13 +2,24 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use std::io::Cursor;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use serde::{Deserialize, Serialize};
 use dashmap::DashMap;
 use uuid::Uuid;
 use log::{info, warn, error, debug};
-use nova_core::{NovaEngine, EngineConfig, NovaResult, NovaError};
+use nova_core::{NovaEngine, EngineConfig, NovaResult, NovaError, NovaProtocol};
+use prost::Message;
+use bytes::{Bytes, BytesMut, Buf, BufMut};
+
+// Include generated protobuf code for networking
+pub mod protocol {
+    include!(concat!(env!("OUT_DIR"), "/nova.protocol.rs"));
+}
+
+pub use protocol::*;
 
 /// Server configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,7 +82,7 @@ impl Default for ServerConfig {
     }
 }
 
-/// Client connection information
+/// Client connection information with high-performance networking
 #[derive(Debug)]
 pub struct ClientConnection {
     pub id: Uuid,
@@ -80,6 +91,9 @@ pub struct ClientConnection {
     pub connected_at: Instant,
     pub last_heartbeat: Instant,
     pub player_name: Option<String>,
+    pub protocol: NovaProtocol,
+    pub session_id: String,
+    pub heartbeat_sequence: u32,
 }
 
 /// Server statistics
@@ -94,7 +108,7 @@ pub struct ServerStats {
     pub avg_tick_time_ms: f64,
 }
 
-/// Nova Server for hosting multiplayer game sessions
+/// Nova Server for hosting multiplayer game sessions with high-performance networking
 pub struct NovaServer {
     config: ServerConfig,
     engine: Arc<NovaEngine>,
@@ -102,6 +116,7 @@ pub struct NovaServer {
     listener: Option<TcpListener>,
     stats: Arc<Mutex<ServerStats>>,
     start_time: Instant,
+    protocol: NovaProtocol,
 }
 
 impl NovaServer {
@@ -126,6 +141,7 @@ impl NovaServer {
                 avg_tick_time_ms: 0.0,
             })),
             start_time: Instant::now(),
+            protocol: NovaProtocol::new(1024 * 1024, true), // 1MB max, compression enabled
         };
         
         info!("Nova Server initialized successfully");
@@ -214,6 +230,7 @@ impl NovaServer {
                     }
                     
                     let client_id = Uuid::new_v4();
+                    let session_id = format!("{}-{}", client_id, Instant::now().elapsed().as_millis());
                     let connection = ClientConnection {
                         id: client_id,
                         addr,
@@ -221,6 +238,9 @@ impl NovaServer {
                         connected_at: Instant::now(),
                         last_heartbeat: Instant::now(),
                         player_name: None,
+                        protocol: NovaProtocol::new(1024 * 1024, true),
+                        session_id,
+                        heartbeat_sequence: 0,
                     };
                     
                     self.clients.insert(client_id, connection);
@@ -390,15 +410,141 @@ impl NovaServer {
         }
     }
     
-    /// Broadcast message to all connected clients
+    /// Broadcast protobuf message to all connected clients with blazing fast performance
+    pub async fn broadcast_proto<T: Message>(&self, message: &T) -> NovaResult<()> {
+        let encoded = self.protocol.encode(message)?;
+        self.broadcast(&encoded).await
+    }
+    
+    /// Send protobuf message to specific client with high performance
+    pub async fn send_proto_to_client<T: Message>(&self, client_id: Uuid, message: &T) -> NovaResult<()> {
+        let encoded = self.protocol.encode(message)?;
+        self.send_to_client(client_id, &encoded).await
+    }
+    
+    /// Send packet to specific client using the optimized protocol
+    pub async fn send_packet_to_client(&self, client_id: Uuid, packet: &protocol::Packet) -> NovaResult<()> {
+        let encoded = self.protocol.encode_packet(packet)?;
+        
+        if let Some(client) = self.clients.get(&client_id) {
+            let mut stream = client.stream.lock().await;
+            stream.write_all(&encoded).await
+                .map_err(|e| NovaError::Generic(anyhow::anyhow!("Failed to send packet: {}", e)))?;
+            
+            // Update statistics
+            let mut stats = self.stats.lock().await;
+            stats.bytes_sent += encoded.len() as u64;
+            
+            debug!("Sent packet ({} bytes) to client {}", encoded.len(), client_id);
+            Ok(())
+        } else {
+            Err(NovaError::Generic(anyhow::anyhow!("Client {} not found", client_id)))
+        }
+    }
+    
+    /// Broadcast packet to all connected clients
+    pub async fn broadcast_packet(&self, packet: &protocol::Packet) -> NovaResult<()> {
+        let encoded = self.protocol.encode_packet(packet)?;
+        let mut total_sent = 0u64;
+        
+        for entry in self.clients.iter() {
+            let (client_id, client) = entry.pair();
+            match client.stream.lock().await.write_all(&encoded).await {
+                Ok(_) => {
+                    total_sent += encoded.len() as u64;
+                    debug!("Broadcast packet to client {}", client_id);
+                }
+                Err(e) => {
+                    warn!("Failed to send broadcast to client {}: {}", client_id, e);
+                }
+            }
+        }
+        
+        // Update statistics
+        {
+            let mut stats = self.stats.lock().await;
+            stats.bytes_sent += total_sent;
+        }
+        
+        Ok(())
+    }
+    
+    /// Send heartbeat to specific client
+    pub async fn send_heartbeat_to_client(&self, client_id: Uuid) -> NovaResult<()> {
+        if let Some(mut client) = self.clients.get_mut(&client_id) {
+            client.heartbeat_sequence += 1;
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64;
+            
+            let packet = NovaProtocol::create_heartbeat(timestamp, client.heartbeat_sequence);
+            self.send_packet_to_client(client_id, &packet).await
+        } else {
+            Err(NovaError::Generic(anyhow::anyhow!("Client {} not found", client_id)))
+        }
+    }
+    
+    /// Handle client handshake with protobuf protocol
+    pub async fn handle_handshake(&self, client_id: Uuid, handshake: protocol::Handshake) -> NovaResult<()> {
+        info!("Handling handshake from client {}: {}", client_id, handshake.player_name);
+        
+        // Update client information
+        if let Some(mut client) = self.clients.get_mut(&client_id) {
+            client.player_name = Some(handshake.player_name.clone());
+        }
+        
+        // Create handshake response
+        let response = protocol::HandshakeResponse {
+            accepted: true,
+            server_version: "1.0.0".to_string(),
+            session_id: if let Some(client) = self.clients.get(&client_id) {
+                client.session_id.clone()
+            } else {
+                return Err(NovaError::Generic(anyhow::anyhow!("Client not found")));
+            },
+            settings: Some(protocol::ServerSettings {
+                tick_rate: self.config.server.tick_rate,
+                max_players: self.config.server.max_clients as u32,
+                compression_enabled: self.config.networking.compression,
+                heartbeat_interval: 30, // seconds
+            }),
+            error_message: None,
+        };
+        
+        let packet = protocol::Packet {
+            id: uuid::Uuid::new_v4().as_u128() as u64,
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64,
+            r#type: protocol::PacketType::PacketTypeHandshake as i32,
+            payload: {
+                let mut buf = BytesMut::new();
+                response.encode(&mut buf).unwrap();
+                buf.freeze()
+            },
+            compression: None,
+        };
+        
+        self.send_packet_to_client(client_id, &packet).await
+    }
+    
+    /// Broadcast message to all connected clients (legacy method for raw bytes)
     pub async fn broadcast(&self, data: &[u8]) -> NovaResult<()> {
         let mut bytes_sent = 0u64;
         
         for entry in self.clients.iter() {
-            let (id, _client) = entry.pair();
-            // This would actually send data to the client
-            bytes_sent += data.len() as u64;
-            debug!("Broadcasting {} bytes to client {}", data.len(), id);
+            let (id, client) = entry.pair();
+            match client.stream.lock().await.write_all(data).await {
+                Ok(_) => {
+                    bytes_sent += data.len() as u64;
+                    debug!("Broadcasting {} bytes to client {}", data.len(), id);
+                }
+                Err(e) => {
+                    warn!("Failed to broadcast to client {}: {}", id, e);
+                }
+            }
         }
         
         // Update statistics
@@ -410,17 +556,23 @@ impl NovaServer {
         Ok(())
     }
     
-    /// Send message to specific client
+    /// Send message to specific client (legacy method for raw bytes)
     pub async fn send_to_client(&self, client_id: Uuid, data: &[u8]) -> NovaResult<()> {
         if let Some(client) = self.clients.get(&client_id) {
-            // This would actually send data to the specific client
-            debug!("Sending {} bytes to client {}", data.len(), client_id);
-            
-            // Update statistics
-            let mut stats = self.stats.lock().await;
-            stats.bytes_sent += data.len() as u64;
-            
-            Ok(())
+            match client.stream.lock().await.write_all(data).await {
+                Ok(_) => {
+                    debug!("Sending {} bytes to client {}", data.len(), client_id);
+                    
+                    // Update statistics
+                    let mut stats = self.stats.lock().await;
+                    stats.bytes_sent += data.len() as u64;
+                    
+                    Ok(())
+                }
+                Err(e) => {
+                    Err(NovaError::Generic(anyhow::anyhow!("Failed to send to client: {}", e)))
+                }
+            }
         } else {
             Err(NovaError::Generic(anyhow::anyhow!("Client {} not found", client_id)))
         }

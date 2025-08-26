@@ -1,11 +1,22 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use std::io::Cursor;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use serde::{Deserialize, Serialize};
 use log::{info, warn, error};
-use nova_core::{NovaEngine, EngineConfig, NovaResult, NovaError};
+use nova_core::{NovaEngine, EngineConfig, NovaResult, NovaError, NovaProtocol};
+use prost::Message;
+use bytes::{Bytes, BytesMut, Buf, BufMut};
+
+// Include generated protobuf code for networking
+pub mod protocol {
+    include!(concat!(env!("OUT_DIR"), "/nova.protocol.rs"));
+}
+
+pub use protocol::*;
 
 /// Client configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,12 +72,15 @@ pub enum ConnectionStatus {
     Failed(String),
 }
 
-/// Nova Client for connecting to Nova Servers
+/// Nova Client for connecting to Nova Servers with high-performance networking
 pub struct NovaClient {
     config: ClientConfig,
     engine: Arc<NovaEngine>,
     connection: Arc<Mutex<Option<TcpStream>>>,
     status: Arc<Mutex<ConnectionStatus>>,
+    protocol: NovaProtocol,
+    session_id: Option<String>,
+    heartbeat_sequence: u32,
 }
 
 impl NovaClient {
@@ -81,6 +95,9 @@ impl NovaClient {
             engine,
             connection: Arc::new(Mutex::new(None)),
             status: Arc::new(Mutex::new(ConnectionStatus::Disconnected)),
+            protocol: NovaProtocol::new(1024 * 1024, true), // 1MB max, compression enabled
+            session_id: None,
+            heartbeat_sequence: 0,
         };
         
         info!("Nova Client initialized successfully");
@@ -238,12 +255,25 @@ impl NovaClient {
         Ok(())
     }
     
-    /// Send heartbeat message to server
-    async fn send_heartbeat(&self) -> NovaResult<()> {
-        // This would send a heartbeat packet to the server
-        // For now, we'll just log it
-        log::trace!("Sending heartbeat to server");
-        Ok(())
+    /// Send raw data to server (legacy method)
+    pub async fn send_data(&self, data: &[u8]) -> NovaResult<()> {
+        if data.len() > self.config.networking.max_packet_size {
+            return Err(NovaError::Generic(anyhow::anyhow!("Packet too large")));
+        }
+        
+        let status = self.status.lock().await.clone();
+        if status != ConnectionStatus::Connected {
+            return Err(NovaError::Generic(anyhow::anyhow!("Not connected to server")));
+        }
+        
+        if let Some(ref mut stream) = *self.connection.lock().await {
+            stream.write_all(data).await
+                .map_err(|e| NovaError::Generic(anyhow::anyhow!("Failed to send data: {}", e)))?;
+            log::trace!("Sending {} bytes to server", data.len());
+            Ok(())
+        } else {
+            Err(NovaError::Generic(anyhow::anyhow!("No connection to server")))
+        }
     }
     
     /// Start message handler task
@@ -292,19 +322,114 @@ impl NovaClient {
         &self.engine
     }
     
-    /// Send data to server
-    pub async fn send_data(&self, data: &[u8]) -> NovaResult<()> {
-        if data.len() > self.config.networking.max_packet_size {
-            return Err(NovaError::Generic(anyhow::anyhow!("Packet too large")));
-        }
+    /// Send protobuf message to server with blazing fast performance
+    pub async fn send_proto<T: Message>(&self, message: &T) -> NovaResult<()> {
+        let encoded = self.protocol.encode(message)?;
+        self.send_data(&encoded).await
+    }
+    
+    /// Send packet to server using optimized protocol
+    pub async fn send_packet(&self, packet: &protocol::Packet) -> NovaResult<()> {
+        let encoded = self.protocol.encode_packet(packet)?;
         
         let status = self.status.lock().await.clone();
         if status != ConnectionStatus::Connected {
             return Err(NovaError::Generic(anyhow::anyhow!("Not connected to server")));
         }
         
-        // This would actually send data over the connection
-        log::trace!("Sending {} bytes to server", data.len());
+        if let Some(ref mut stream) = *self.connection.lock().await {
+            stream.write_all(&encoded).await
+                .map_err(|e| NovaError::Generic(anyhow::anyhow!("Failed to send packet: {}", e)))?;
+            log::trace!("Sent packet ({} bytes) to server", encoded.len());
+            Ok(())
+        } else {
+            Err(NovaError::Generic(anyhow::anyhow!("No connection to server")))
+        }
+    }
+    
+    /// Send handshake to server
+    pub async fn send_handshake(&self, player_name: String) -> NovaResult<()> {
+        let capabilities = protocol::ClientCapabilities {
+            compression_support: true,
+            supported_protocols: vec!["nova-v1".to_string()],
+            max_packet_size: 1024 * 1024, // 1MB
+        };
+        
+        let packet = NovaProtocol::create_handshake(
+            "1.0.0".to_string(),
+            player_name,
+            capabilities,
+        );
+        
+        self.send_packet(&packet).await
+    }
+    
+    /// Send heartbeat to server
+    pub async fn send_heartbeat(&self) -> NovaResult<()> {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        
+        let packet = NovaProtocol::create_heartbeat(timestamp, self.heartbeat_sequence);
+        self.send_packet(&packet).await
+    }
+    
+    /// Process incoming packet from server
+    async fn process_packet(&mut self, packet: protocol::Packet) -> NovaResult<()> {
+        match protocol::PacketType::from_i32(packet.r#type) {
+            Some(protocol::PacketType::PacketTypeHeartbeat) => {
+                // Respond to heartbeat
+                let heartbeat_response = protocol::HeartbeatResponse {
+                    timestamp: packet.timestamp,
+                    sequence: self.heartbeat_sequence,
+                    server_time: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as u64,
+                };
+                
+                let response_packet = protocol::Packet {
+                    id: uuid::Uuid::new_v4().as_u128() as u64,
+                    timestamp: heartbeat_response.server_time,
+                    r#type: protocol::PacketType::PacketTypeHeartbeat as i32,
+                    payload: {
+                        let mut buf = BytesMut::new();
+                        heartbeat_response.encode(&mut buf).unwrap();
+                        buf.freeze()
+                    },
+                    compression: None,
+                };
+                
+                self.send_packet(&response_packet).await?;
+                debug!("Responded to heartbeat from server");
+            }
+            Some(protocol::PacketType::PacketTypeHandshake) => {
+                // Handle handshake response
+                let response: protocol::HandshakeResponse = self.protocol.extract_payload(&packet)?;
+                if response.accepted {
+                    self.session_id = Some(response.session_id);
+                    info!("Handshake accepted by server, session: {:?}", self.session_id);
+                } else {
+                    warn!("Handshake rejected: {:?}", response.error_message);
+                }
+            }
+            Some(protocol::PacketType::PacketTypeError) => {
+                // Handle error
+                let error: protocol::Error = self.protocol.extract_payload(&packet)?;
+                error!("Server error: {} - {}", error.code, error.message);
+            }
+            Some(protocol::PacketType::PacketTypeDisconnect) => {
+                // Handle disconnect
+                let disconnect: protocol::Disconnect = self.protocol.extract_payload(&packet)?;
+                warn!("Server disconnect: {:?} - {:?}", disconnect.reason, disconnect.message);
+                *self.status.lock().await = ConnectionStatus::Disconnected;
+            }
+            _ => {
+                debug!("Unhandled packet type: {}", packet.r#type);
+            }
+        }
+        
         Ok(())
     }
 }

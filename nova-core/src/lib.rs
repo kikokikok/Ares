@@ -8,6 +8,7 @@ pub mod engine;
 pub mod error;
 pub mod events;
 pub mod plugins;
+pub mod protocol;
 pub mod resources;
 pub mod threading;
 
@@ -16,6 +17,7 @@ pub use engine::NovaEngine;
 pub use error::{NovaError, NovaResult};
 pub use events::{Event, EventSystem};
 pub use plugins::{Plugin, PluginManager};
+pub use protocol::{NovaProtocol, ProtoSerialize};
 pub use resources::{Resource, ResourceManager};
 pub use threading::ThreadEngine;
 
