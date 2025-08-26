@@ -1,4 +1,7 @@
 use nova_core::*;
+use nova_core::engine::EngineBuilder;
+use nova_core::events::SimpleEventHandler;
+use nova_core::threading::TaskPriority;
 use log::{info, warn};
 use std::time::Duration;
 use rand::Rng;
@@ -186,7 +189,7 @@ impl BasicGame {
             
             // Log stats every 5 seconds
             if frame_count % 300 == 0 {
-                self.log_game_stats();
+                self.log_game_stats().await;
             }
             
             // Maintain 60 FPS
@@ -224,8 +227,8 @@ impl BasicGame {
         Ok(())
     }
     
-    fn log_game_stats(&self) {
-        let memory_stats = self.engine.resource_manager().get_memory_stats();
+    async fn log_game_stats(&self) {
+        let memory_stats = self.engine.resource_manager().get_memory_stats().await;
         let threading_stats = self.engine.thread_engine().get_stats();
         let event_stats = self.engine.event_system().get_stats();
         

@@ -1,6 +1,10 @@
 use nova_core::*;
+use nova_core::config::{EngineSettings, MemoryConfig, ThreadingConfig, EventConfig, PluginConfig as ConfigPluginConfig};
+use nova_core::resources::TextureResource;
+use nova_core::threading::{ComputeTask, TaskPriority, Task};
+use nova_core::events::{SimpleEventHandler, EngineStartEvent};
+use nova_core::engine::EngineBuilder;
 use std::time::Duration;
-use tokio::time::timeout;
 
 #[tokio::test]
 async fn test_engine_creation() {
@@ -31,7 +35,7 @@ async fn test_engine_with_custom_config() {
             queue_size: 1000,
             priority_levels: 3,
         },
-        plugins: PluginConfig {
+        plugins: ConfigPluginConfig {
             directory: std::path::PathBuf::from("test_plugins"),
             auto_load: false,
             hot_reload: false,
@@ -56,11 +60,11 @@ async fn test_resource_manager() {
         format: "RGBA8".to_string(),
     };
     
-    let handle = resource_manager.create_resource(texture).unwrap();
-    assert!(resource_manager.get_resource(&handle).is_ok());
+    let handle = resource_manager.create_resource(texture).await.unwrap();
+    assert!(resource_manager.get_resource(&handle).await.is_ok());
     
     // Test memory stats
-    let stats = resource_manager.get_memory_stats();
+    let stats = resource_manager.get_memory_stats().await;
     assert!(stats.resource_count > 0);
     assert!(stats.total_used > 0);
 }
@@ -95,7 +99,7 @@ async fn test_thread_engine() {
     let thread_engine = ThreadEngine::new(2, None).unwrap();
     
     // Submit a simple task
-    let task_id = thread_engine.submit_function(
+    let _task_id = thread_engine.submit_function(
         "test_task".to_string(),
         TaskPriority::Normal,
         || {
@@ -121,7 +125,7 @@ async fn test_plugin_manager() {
     );
     
     // Test plugin list (should be empty initially)
-    let plugins = plugin_manager.list_plugins();
+    let plugins = plugin_manager.list_plugins().await;
     assert!(plugins.is_empty());
 }
 

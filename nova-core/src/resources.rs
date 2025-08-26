@@ -48,7 +48,7 @@ impl<T> ResourceHandle<T> {
 
 /// Resource entry in the resource manager
 struct ResourceEntry {
-    resource: Box<dyn Any + Send + Sync>,
+    resource: Arc<dyn Any + Send + Sync>,
     type_name: &'static str,
     size: usize,
     ref_count: usize,
@@ -156,7 +156,7 @@ impl ResourceManager {
         
         let resource_id = Uuid::new_v4();
         let entry = ResourceEntry {
-            resource: Box::new(resource),
+            resource: Arc::new(resource),
             type_name: std::any::type_name::<T>(),
             size: resource_size,
             ref_count: 1,
@@ -195,7 +195,7 @@ impl ResourceManager {
         
         let resource_id = Uuid::new_v4();
         let entry = ResourceEntry {
-            resource: Box::new(resource),
+            resource: Arc::new(resource),
             type_name: std::any::type_name::<T>(),
             size: resource_size,
             ref_count: 1,
@@ -226,12 +226,12 @@ impl ResourceManager {
             entry.last_accessed = std::time::Instant::now();
             entry.ref_count += 1;
             
-            let resource = entry.resource.downcast_ref::<T>()
-                .ok_or_else(|| NovaError::resource("Resource type mismatch"))?;
+            // Safe downcasting with Arc
+            let resource_arc = entry.resource.clone();
+            let resource = resource_arc.downcast::<T>()
+                .map_err(|_| NovaError::resource("Resource type mismatch"))?;
             
-            // Clone the resource data for now - in a real implementation,
-            // this would return a proper shared reference
-            Ok(Arc::new(unsafe { std::ptr::read(resource) }))
+            Ok(resource)
         } else {
             Err(NovaError::resource("Resource not found"))
         }
