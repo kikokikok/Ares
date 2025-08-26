@@ -1,0 +1,21 @@
+[engine]
+name = "Nova Game"
+version = "1.0.0"
+debug = true
+
+[memory]
+heap_size = "512MB"
+pool_count = 8
+gc_threshold = 0.7
+
+[threading]
+worker_threads = 4
+
+[events]
+queue_size = 5000
+priority_levels = 4
+
+[plugins]
+directory = "./plugins"
+auto_load = true
+hot_reload = true
