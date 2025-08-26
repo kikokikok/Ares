@@ -9,21 +9,30 @@ use prost::Message;
 use std::io::{Cursor, Read};
 
 // Include generated protobuf code
-pub mod protocol {
+pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/nova.protocol.rs"));
 }
 
-pub mod resources {
+pub mod resource_proto {
     include!(concat!(env!("OUT_DIR"), "/nova.resources.rs"));
 }
 
-pub use protocol::*;
-pub use resources::*;
+// Re-export specific types to avoid conflicts
+pub use proto::{
+    ClientCapabilities, Disconnect, DisconnectReason, Error, ErrorCode, GameState, Handshake,
+    HandshakeResponse, Heartbeat, HeartbeatResponse, Packet, PacketType, PlayerAction,
+    ResourceRequest, ResourceResponse, ServerSettings,
+};
+pub use resource_proto::{
+    AudioResource, MeshResource, ResourceType as ProtoResourceType, ShaderResource,
+    TextureResource, Vec3 as ProtoVec3,
+};
 
 /// High-performance protocol codec for Nova messages
 #[derive(Debug, Clone)]
 pub struct NovaProtocol {
     max_message_size: usize,
+    #[allow(dead_code)]
     compression_enabled: bool,
 }
 
@@ -79,7 +88,7 @@ impl NovaProtocol {
     }
 
     /// Encode a packet with header information
-    pub fn encode_packet(&self, packet: &protocol::Packet) -> NovaResult<Bytes> {
+    pub fn encode_packet(&self, packet: &Packet) -> NovaResult<Bytes> {
         // Add 4-byte length prefix for framing
         let encoded = self.encode(packet)?;
         let total_len = encoded.len() + 4;
@@ -92,7 +101,7 @@ impl NovaProtocol {
     }
 
     /// Decode a packet from framed data
-    pub fn decode_packet(&self, data: &mut Cursor<&[u8]>) -> NovaResult<Option<protocol::Packet>> {
+    pub fn decode_packet(&self, data: &mut Cursor<&[u8]>) -> NovaResult<Option<Packet>> {
         if data.remaining() < 4 {
             return Ok(None); // Not enough data for length prefix
         }
@@ -121,8 +130,8 @@ impl NovaProtocol {
     }
 
     /// Create a heartbeat packet
-    pub fn create_heartbeat(timestamp: u64, sequence: u32) -> protocol::Packet {
-        let heartbeat = protocol::Heartbeat {
+    pub fn create_heartbeat(timestamp: u64, sequence: u32) -> Packet {
+        let heartbeat = Heartbeat {
             timestamp,
             sequence,
         };
@@ -130,10 +139,10 @@ impl NovaProtocol {
         let mut payload = BytesMut::new();
         heartbeat.encode(&mut payload).unwrap();
 
-        protocol::Packet {
+        Packet {
             id: uuid::Uuid::new_v4().as_u128() as u64,
             timestamp,
-            r#type: protocol::PacketType::Heartbeat as i32,
+            r#type: PacketType::Heartbeat as i32,
             payload: payload.freeze().to_vec(),
             compression: None,
         }
@@ -143,9 +152,9 @@ impl NovaProtocol {
     pub fn create_handshake(
         client_version: String,
         player_name: String,
-        capabilities: protocol::ClientCapabilities,
-    ) -> protocol::Packet {
-        let handshake = protocol::Handshake {
+        capabilities: ClientCapabilities,
+    ) -> Packet {
+        let handshake = Handshake {
             client_version,
             player_name,
             capabilities: Some(capabilities),
@@ -154,21 +163,21 @@ impl NovaProtocol {
         let mut payload = BytesMut::new();
         handshake.encode(&mut payload).unwrap();
 
-        protocol::Packet {
+        Packet {
             id: uuid::Uuid::new_v4().as_u128() as u64,
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_millis() as u64,
-            r#type: protocol::PacketType::Handshake as i32,
+            r#type: PacketType::Handshake as i32,
             payload: payload.freeze().to_vec(),
             compression: None,
         }
     }
 
     /// Create an error packet
-    pub fn create_error(code: protocol::ErrorCode, message: String) -> protocol::Packet {
-        let error = protocol::Error {
+    pub fn create_error(code: ErrorCode, message: String) -> Packet {
+        let error = Error {
             code: code as i32,
             message,
             details: None,
@@ -177,23 +186,20 @@ impl NovaProtocol {
         let mut payload = BytesMut::new();
         error.encode(&mut payload).unwrap();
 
-        protocol::Packet {
+        Packet {
             id: uuid::Uuid::new_v4().as_u128() as u64,
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_millis() as u64,
-            r#type: protocol::PacketType::Error as i32,
+            r#type: PacketType::Error as i32,
             payload: payload.freeze().to_vec(),
             compression: None,
         }
     }
 
     /// Extract typed message from packet payload
-    pub fn extract_payload<T: Message + Default>(
-        &self,
-        packet: &protocol::Packet,
-    ) -> NovaResult<T> {
+    pub fn extract_payload<T: Message + Default>(&self, packet: &Packet) -> NovaResult<T> {
         self.decode(&packet.payload)
     }
 }
@@ -240,13 +246,13 @@ mod tests {
         let protocol = NovaProtocol::default();
 
         // Test heartbeat encoding/decoding
-        let heartbeat = protocol::Heartbeat {
+        let heartbeat = Heartbeat {
             timestamp: 12345,
             sequence: 1,
         };
 
         let encoded = protocol.encode(&heartbeat).unwrap();
-        let decoded: protocol::Heartbeat = protocol.decode(&encoded).unwrap();
+        let decoded: Heartbeat = protocol.decode(&encoded).unwrap();
 
         assert_eq!(heartbeat, decoded);
     }
@@ -268,10 +274,10 @@ mod tests {
     fn test_message_size_limits() {
         let protocol = NovaProtocol::new(100, false); // Small limit for testing
 
-        let large_packet = protocol::Packet {
+        let large_packet = Packet {
             id: 1,
             timestamp: 12345,
-            r#type: protocol::PacketType::Heartbeat as i32,
+            r#type: PacketType::Heartbeat as i32,
             payload: vec![0u8; 200].into(), // Larger than limit
             compression: None,
         };

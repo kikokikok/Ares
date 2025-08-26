@@ -4,7 +4,7 @@ use nova_core::resources::{AudioResource, ResourceManager, TextureResource};
 use nova_core::threading::{TaskPriority, ThreadEngine};
 
 fn benchmark_event_dispatch(c: &mut Criterion) {
-    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _rt = tokio::runtime::Runtime::new().unwrap();
 
     c.bench_function("event_dispatch", |b| {
         let event_system = EventSystem::new(10000, 5);
@@ -20,9 +20,9 @@ fn benchmark_event_dispatch(c: &mut Criterion) {
 
 fn benchmark_resource_creation(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
-    
+
     c.bench_function("resource_creation", |b| {
-        let resource_manager = rt.block_on(async { ResourceManager::new("1GB", 0.8).await }).unwrap();
+        let resource_manager = ResourceManager::new("1GB", 0.8).unwrap();
 
         b.iter(|| {
             let texture = TextureResource {
@@ -32,7 +32,9 @@ fn benchmark_resource_creation(c: &mut Criterion) {
                 format: "RGBA8".to_string(),
             };
 
-            let handle = rt.block_on(resource_manager.create_resource(texture)).unwrap();
+            let handle = rt
+                .block_on(resource_manager.create_resource(texture))
+                .unwrap();
             black_box(handle);
         });
     });
@@ -57,9 +59,9 @@ fn benchmark_task_submission(c: &mut Criterion) {
 
 fn benchmark_memory_allocation(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
-    
+
     c.bench_function("memory_allocation", |b| {
-        let resource_manager = rt.block_on(async { ResourceManager::new("2GB", 0.9).await }).unwrap();
+        let resource_manager = ResourceManager::new("2GB", 0.9).unwrap();
 
         b.iter(|| {
             let audio = AudioResource {
@@ -68,8 +70,11 @@ fn benchmark_memory_allocation(c: &mut Criterion) {
                 samples: vec![0.0f32; 44100 * 2], // 1 second of audio
             };
 
-            let handle = rt.block_on(resource_manager.create_resource(audio)).unwrap();
-            rt.block_on(resource_manager.unload_resource(handle)).unwrap();
+            let handle = rt
+                .block_on(resource_manager.create_resource(audio))
+                .unwrap();
+            rt.block_on(resource_manager.unload_resource(handle))
+                .unwrap();
         });
     });
 }

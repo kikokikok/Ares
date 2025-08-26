@@ -17,7 +17,11 @@ pub use engine::NovaEngine;
 pub use error::{NovaError, NovaResult};
 pub use events::{Event, EventSystem};
 pub use plugins::{Plugin, PluginManager};
-pub use protocol::{NovaProtocol, ProtoSerialize};
+pub use protocol::{
+    ClientCapabilities, Disconnect, DisconnectReason, Error, ErrorCode, GameState, Handshake,
+    HandshakeResponse, Heartbeat, HeartbeatResponse, NovaProtocol, Packet, PacketType,
+    PlayerAction, ProtoSerialize, ResourceRequest, ResourceResponse, ServerSettings,
+};
 pub use resources::{Resource, ResourceManager};
 pub use threading::ThreadEngine;
 

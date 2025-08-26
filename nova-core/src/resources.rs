@@ -1,6 +1,6 @@
 use crate::config::parse_memory_size;
 use crate::error::{NovaError, NovaResult};
-use crate::protocol::{resources as proto_resources, ProtoSerialize};
+use crate::protocol::{resource_proto, ProtoSerialize};
 use std::any::Any;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -49,10 +49,12 @@ impl<T> ResourceHandle<T> {
 /// Resource entry in the resource manager
 struct ResourceEntry {
     resource: Arc<dyn Any + Send + Sync>,
+    #[allow(dead_code)]
     type_name: &'static str,
     size: usize,
     ref_count: usize,
     last_accessed: std::time::Instant,
+    #[allow(dead_code)]
     dependencies: Vec<Uuid>,
 }
 
@@ -363,33 +365,33 @@ pub struct TextureResource {
 }
 
 impl ProtoSerialize for TextureResource {
-    type Proto = proto_resources::TextureResource;
+    type Proto = resource_proto::TextureResource;
 
     fn to_proto(&self) -> Self::Proto {
         // Convert to protobuf format for optimal wire performance
         let format = match self.format.as_str() {
-            "RGBA8" => proto_resources::TextureFormat::Rgba8,
-            "RGB8" => proto_resources::TextureFormat::Rgb8,
-            "RGBA16F" => proto_resources::TextureFormat::Rgba16f,
-            "RGBA32F" => proto_resources::TextureFormat::Rgba32f,
-            "DXT1" => proto_resources::TextureFormat::Dxt1,
-            "DXT5" => proto_resources::TextureFormat::Dxt5,
-            "BC7" => proto_resources::TextureFormat::Bc7,
-            _ => proto_resources::TextureFormat::Unspecified,
+            "RGBA8" => resource_proto::TextureFormat::Rgba8,
+            "RGB8" => resource_proto::TextureFormat::Rgb8,
+            "RGBA16F" => resource_proto::TextureFormat::Rgba16f,
+            "RGBA32F" => resource_proto::TextureFormat::Rgba32f,
+            "DXT1" => resource_proto::TextureFormat::Dxt1,
+            "DXT5" => resource_proto::TextureFormat::Dxt5,
+            "BC7" => resource_proto::TextureFormat::Bc7,
+            _ => resource_proto::TextureFormat::Unspecified,
         };
 
-        proto_resources::TextureResource {
+        resource_proto::TextureResource {
             width: self.width,
             height: self.height,
             format: format as i32,
             mip_levels: 1,
-            data: vec![proto_resources::TextureData {
+            data: vec![resource_proto::TextureData {
                 level: 0,
                 width: self.width,
                 height: self.height,
                 data: self.data.clone(),
             }],
-            flags: Some(proto_resources::TextureFlags {
+            flags: Some(resource_proto::TextureFlags {
                 is_srgb: false,
                 generate_mipmaps: false,
                 is_cubemap: false,
@@ -400,14 +402,14 @@ impl ProtoSerialize for TextureResource {
 
     fn from_proto(proto: Self::Proto) -> NovaResult<Self> {
         use std::convert::TryFrom;
-        let format = match proto_resources::TextureFormat::try_from(proto.format) {
-            Ok(proto_resources::TextureFormat::Rgba8) => "RGBA8",
-            Ok(proto_resources::TextureFormat::Rgb8) => "RGB8",
-            Ok(proto_resources::TextureFormat::Rgba16f) => "RGBA16F",
-            Ok(proto_resources::TextureFormat::Rgba32f) => "RGBA32F",
-            Ok(proto_resources::TextureFormat::Dxt1) => "DXT1",
-            Ok(proto_resources::TextureFormat::Dxt5) => "DXT5",
-            Ok(proto_resources::TextureFormat::Bc7) => "BC7",
+        let format = match resource_proto::TextureFormat::try_from(proto.format) {
+            Ok(resource_proto::TextureFormat::Rgba8) => "RGBA8",
+            Ok(resource_proto::TextureFormat::Rgb8) => "RGB8",
+            Ok(resource_proto::TextureFormat::Rgba16f) => "RGBA16F",
+            Ok(resource_proto::TextureFormat::Rgba32f) => "RGBA32F",
+            Ok(resource_proto::TextureFormat::Dxt1) => "DXT1",
+            Ok(resource_proto::TextureFormat::Dxt5) => "DXT5",
+            Ok(resource_proto::TextureFormat::Bc7) => "BC7",
             _ => "RGBA8", // Default fallback
         }
         .to_string();
@@ -455,7 +457,7 @@ pub struct AudioResource {
 }
 
 impl ProtoSerialize for AudioResource {
-    type Proto = proto_resources::AudioResource;
+    type Proto = resource_proto::AudioResource;
 
     fn to_proto(&self) -> Self::Proto {
         // Convert samples to bytes for efficient wire transfer
@@ -464,8 +466,8 @@ impl ProtoSerialize for AudioResource {
             sample_bytes.extend_from_slice(&sample.to_le_bytes());
         }
 
-        proto_resources::AudioResource {
-            format: proto_resources::AudioFormat::Wav as i32,
+        resource_proto::AudioResource {
+            format: resource_proto::AudioFormat::Wav as i32,
             sample_rate: self.sample_rate,
             channels: self.channels as u32,
             bit_depth: 32, // f32 samples

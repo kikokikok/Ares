@@ -1,7 +1,9 @@
 use bytes::BytesMut;
 use log::{debug, error, info, warn};
-use nova_core::protocol;
-use nova_core::{EngineConfig, NovaEngine, NovaError, NovaProtocol, NovaResult};
+use nova_core::{
+    ClientCapabilities, Disconnect, EngineConfig, Error, HandshakeResponse, HeartbeatResponse,
+    NovaEngine, NovaError, NovaProtocol, NovaResult, Packet, PacketType,
+};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -72,6 +74,7 @@ pub struct NovaClient {
     connection: Arc<Mutex<Option<TcpStream>>>,
     status: Arc<Mutex<ConnectionStatus>>,
     protocol: NovaProtocol,
+    #[allow(dead_code)]
     session_id: Option<String>,
     heartbeat_sequence: u32,
 }
@@ -344,7 +347,7 @@ impl NovaClient {
     }
 
     /// Send packet to server using optimized protocol
-    pub async fn send_packet(&self, packet: &protocol::Packet) -> NovaResult<()> {
+    pub async fn send_packet(&self, packet: &Packet) -> NovaResult<()> {
         let encoded = self.protocol.encode_packet(packet)?;
 
         let status = self.status.lock().await.clone();
@@ -370,7 +373,7 @@ impl NovaClient {
 
     /// Send handshake to server
     pub async fn send_handshake(&self, player_name: String) -> NovaResult<()> {
-        let capabilities = protocol::ClientCapabilities {
+        let capabilities = ClientCapabilities {
             compression_support: true,
             supported_protocols: vec!["nova-v1".to_string()],
             max_packet_size: 1024 * 1024, // 1MB
@@ -393,11 +396,12 @@ impl NovaClient {
     }
 
     /// Process incoming packet from server
-    async fn process_packet(&mut self, packet: protocol::Packet) -> NovaResult<()> {
-        match protocol::PacketType::try_from(packet.r#type) {
-            Ok(protocol::PacketType::Heartbeat) => {
+    #[allow(dead_code)]
+    async fn process_packet(&mut self, packet: Packet) -> NovaResult<()> {
+        match PacketType::try_from(packet.r#type) {
+            Ok(PacketType::Heartbeat) => {
                 // Respond to heartbeat
-                let heartbeat_response = protocol::HeartbeatResponse {
+                let heartbeat_response = HeartbeatResponse {
                     timestamp: packet.timestamp,
                     sequence: self.heartbeat_sequence,
                     server_time: std::time::SystemTime::now()
@@ -406,10 +410,10 @@ impl NovaClient {
                         .as_millis() as u64,
                 };
 
-                let response_packet = protocol::Packet {
+                let response_packet = Packet {
                     id: uuid::Uuid::new_v4().as_u128() as u64,
                     timestamp: heartbeat_response.server_time,
-                    r#type: protocol::PacketType::Heartbeat as i32,
+                    r#type: PacketType::Heartbeat as i32,
                     payload: {
                         let mut buf = BytesMut::new();
                         heartbeat_response.encode(&mut buf).unwrap();
@@ -421,10 +425,9 @@ impl NovaClient {
                 self.send_packet(&response_packet).await?;
                 debug!("Responded to heartbeat from server");
             }
-            Ok(protocol::PacketType::Handshake) => {
+            Ok(PacketType::Handshake) => {
                 // Handle handshake response
-                let response: protocol::HandshakeResponse =
-                    self.protocol.extract_payload(&packet)?;
+                let response: HandshakeResponse = self.protocol.extract_payload(&packet)?;
                 if response.accepted {
                     self.session_id = Some(response.session_id);
                     info!(
@@ -435,14 +438,14 @@ impl NovaClient {
                     warn!("Handshake rejected: {:?}", response.error_message);
                 }
             }
-            Ok(protocol::PacketType::Error) => {
+            Ok(PacketType::Error) => {
                 // Handle error
-                let error: protocol::Error = self.protocol.extract_payload(&packet)?;
+                let error: Error = self.protocol.extract_payload(&packet)?;
                 error!("Server error: {} - {}", error.code, error.message);
             }
-            Ok(protocol::PacketType::Disconnect) => {
+            Ok(PacketType::Disconnect) => {
                 // Handle disconnect
-                let disconnect: protocol::Disconnect = self.protocol.extract_payload(&packet)?;
+                let disconnect: Disconnect = self.protocol.extract_payload(&packet)?;
                 warn!(
                     "Server disconnect: {:?} - {:?}",
                     disconnect.reason, disconnect.message

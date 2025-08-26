@@ -29,8 +29,11 @@ pub enum EventPriority {
 struct EventWrapper {
     event: Box<dyn Any + Send + Sync>,
     type_id: TypeId,
+    #[allow(dead_code)]
     type_name: &'static str,
+    #[allow(dead_code)]
     priority: EventPriority,
+    #[allow(dead_code)]
     timestamp: std::time::Instant,
 }
 
@@ -40,6 +43,7 @@ type HandlerFn = Box<dyn Fn(&dyn Any) -> NovaResult<()> + Send + Sync>;
 struct HandlerWrapper {
     id: Uuid,
     handler: HandlerFn,
+    #[allow(dead_code)]
     type_id: TypeId,
 }
 
@@ -101,10 +105,7 @@ impl EventSystem {
         };
 
         let mut handlers = self.handlers.write();
-        handlers
-            .entry(type_id)
-            .or_default()
-            .push(wrapper);
+        handlers.entry(type_id).or_default().push(wrapper);
 
         log::debug!(
             "Registered event handler {} for type {:?}",

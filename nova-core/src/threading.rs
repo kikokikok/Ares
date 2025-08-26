@@ -72,6 +72,7 @@ where
 
 /// Task wrapper for internal scheduling
 struct TaskWrapper {
+    #[allow(dead_code)]
     id: Uuid,
     task: Box<dyn Task>,
     priority: TaskPriority,
@@ -100,6 +101,7 @@ pub struct ThreadEngine {
     /// Statistics
     stats: Arc<Mutex<ThreadingStats>>,
     /// Task queue for priority handling
+    #[allow(dead_code)]
     task_queue: Arc<Mutex<std::collections::BinaryHeap<TaskWrapper>>>,
 }
 

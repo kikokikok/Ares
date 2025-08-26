@@ -1,8 +1,11 @@
 use bytes::BytesMut;
 use dashmap::DashMap;
 use log::{debug, error, info, warn};
-use nova_core::protocol;
-use nova_core::{EngineConfig, NovaEngine, NovaError, NovaProtocol, NovaResult};
+use nova_core::protocol::proto::ServerSettings as ProtoServerSettings;
+use nova_core::{
+    EngineConfig, Handshake, HandshakeResponse, NovaEngine, NovaError, NovaProtocol, NovaResult,
+    Packet, PacketType,
+};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
@@ -106,6 +109,7 @@ pub struct NovaServer {
     config: ServerConfig,
     engine: Arc<NovaEngine>,
     clients: Arc<DashMap<Uuid, ClientConnection>>,
+    #[allow(dead_code)]
     listener: Option<TcpListener>,
     stats: Arc<Mutex<ServerStats>>,
     start_time: Instant,
@@ -435,11 +439,7 @@ impl NovaServer {
     }
 
     /// Send packet to specific client using the optimized protocol
-    pub async fn send_packet_to_client(
-        &self,
-        client_id: Uuid,
-        packet: &protocol::Packet,
-    ) -> NovaResult<()> {
+    pub async fn send_packet_to_client(&self, client_id: Uuid, packet: &Packet) -> NovaResult<()> {
         let encoded = self.protocol.encode_packet(packet)?;
 
         if let Some(client) = self.clients.get(&client_id) {
@@ -468,7 +468,7 @@ impl NovaServer {
     }
 
     /// Broadcast packet to all connected clients
-    pub async fn broadcast_packet(&self, packet: &protocol::Packet) -> NovaResult<()> {
+    pub async fn broadcast_packet(&self, packet: &Packet) -> NovaResult<()> {
         let encoded = self.protocol.encode_packet(packet)?;
         let mut total_sent = 0u64;
 
@@ -514,11 +514,7 @@ impl NovaServer {
     }
 
     /// Handle client handshake with protobuf protocol
-    pub async fn handle_handshake(
-        &self,
-        client_id: Uuid,
-        handshake: protocol::Handshake,
-    ) -> NovaResult<()> {
+    pub async fn handle_handshake(&self, client_id: Uuid, handshake: Handshake) -> NovaResult<()> {
         info!(
             "Handling handshake from client {}: {}",
             client_id, handshake.player_name
@@ -530,7 +526,7 @@ impl NovaServer {
         }
 
         // Create handshake response
-        let response = protocol::HandshakeResponse {
+        let response = HandshakeResponse {
             accepted: true,
             server_version: "1.0.0".to_string(),
             session_id: if let Some(client) = self.clients.get(&client_id) {
@@ -538,7 +534,7 @@ impl NovaServer {
             } else {
                 return Err(NovaError::Generic(anyhow::anyhow!("Client not found")));
             },
-            settings: Some(protocol::ServerSettings {
+            settings: Some(ProtoServerSettings {
                 tick_rate: self.config.server.tick_rate,
                 max_players: self.config.server.max_clients as u32,
                 compression_enabled: self.config.networking.compression,
@@ -547,13 +543,13 @@ impl NovaServer {
             error_message: None,
         };
 
-        let packet = protocol::Packet {
+        let packet = Packet {
             id: uuid::Uuid::new_v4().as_u128() as u64,
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_millis() as u64,
-            r#type: protocol::PacketType::Handshake as i32,
+            r#type: PacketType::Handshake as i32,
             payload: {
                 let mut buf = BytesMut::new();
                 response.encode(&mut buf).unwrap();

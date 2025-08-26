@@ -91,6 +91,7 @@ pub struct PluginManager {
     plugins: Arc<RwLock<HashMap<String, PluginEntry>>>,
     plugin_directory: PathBuf,
     auto_load: bool,
+    #[allow(dead_code)]
     hot_reload: bool,
     context: PluginContext,
 }
