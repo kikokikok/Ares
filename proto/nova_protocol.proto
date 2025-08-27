@@ -1,0 +1,234 @@
+syntax = "proto3";
+
+package nova.protocol;
+
+// Common message types for Nova Core Engine networking
+// Optimized for blazing fast serialization/deserialization and minimal wire overhead
+
+// Core networking messages
+message Packet {
+  uint64 id = 1;
+  uint64 timestamp = 2;
+  PacketType type = 3;
+  bytes payload = 4;
+  optional uint32 compression = 5; // Compression type if used
+}
+
+enum PacketType {
+  PACKET_TYPE_UNSPECIFIED = 0;
+  PACKET_TYPE_HEARTBEAT = 1;
+  PACKET_TYPE_HANDSHAKE = 2;
+  PACKET_TYPE_GAME_STATE = 3;
+  PACKET_TYPE_PLAYER_ACTION = 4;
+  PACKET_TYPE_ENTITY_UPDATE = 5;
+  PACKET_TYPE_RESOURCE_REQUEST = 6;
+  PACKET_TYPE_RESOURCE_RESPONSE = 7;
+  PACKET_TYPE_ERROR = 8;
+  PACKET_TYPE_DISCONNECT = 9;
+}
+
+// Client handshake and connection
+message Handshake {
+  string client_version = 1;
+  string player_name = 2;
+  ClientCapabilities capabilities = 3;
+}
+
+message ClientCapabilities {
+  bool compression_support = 1;
+  repeated string supported_protocols = 2;
+  uint32 max_packet_size = 3;
+}
+
+message HandshakeResponse {
+  bool accepted = 1;
+  string server_version = 2;
+  string session_id = 3;
+  ServerSettings settings = 4;
+  optional string error_message = 5;
+}
+
+message ServerSettings {
+  uint32 tick_rate = 1;
+  uint32 max_players = 2;
+  bool compression_enabled = 3;
+  uint32 heartbeat_interval = 4;
+}
+
+// Heartbeat for connection monitoring
+message Heartbeat {
+  uint64 timestamp = 1;
+  uint32 sequence = 2;
+}
+
+message HeartbeatResponse {
+  uint64 timestamp = 1;
+  uint32 sequence = 2;
+  uint64 server_time = 3;
+}
+
+// Game state and entity updates
+message GameState {
+  uint64 tick = 1;
+  repeated EntityUpdate entities = 2;
+  WorldState world = 3;
+}
+
+message EntityUpdate {
+  string entity_id = 1;
+  EntityType type = 2;
+  Transform transform = 3;
+  repeated ComponentUpdate components = 4;
+  EntityState state = 5;
+}
+
+enum EntityType {
+  ENTITY_TYPE_UNSPECIFIED = 0;
+  ENTITY_TYPE_PLAYER = 1;
+  ENTITY_TYPE_NPC = 2;
+  ENTITY_TYPE_OBJECT = 3;
+  ENTITY_TYPE_PROJECTILE = 4;
+  ENTITY_TYPE_EFFECT = 5;
+}
+
+enum EntityState {
+  ENTITY_STATE_UNSPECIFIED = 0;
+  ENTITY_STATE_ACTIVE = 1;
+  ENTITY_STATE_INACTIVE = 2;
+  ENTITY_STATE_DESTROYED = 3;
+}
+
+message Transform {
+  Vec3 position = 1;
+  Vec3 rotation = 2;
+  Vec3 scale = 3;
+}
+
+message Vec3 {
+  float x = 1;
+  float y = 2;
+  float z = 3;
+}
+
+message ComponentUpdate {
+  string component_type = 1;
+  bytes data = 2; // Serialized component data
+}
+
+message WorldState {
+  uint32 world_size = 1;
+  repeated ChunkUpdate chunks = 2;
+  EnvironmentState environment = 3;
+}
+
+message ChunkUpdate {
+  int32 x = 1;
+  int32 z = 2;
+  bytes data = 3; // Compressed chunk data
+}
+
+message EnvironmentState {
+  float time_of_day = 1;
+  WeatherType weather = 2;
+  float wind_speed = 3;
+  Vec3 wind_direction = 4;
+}
+
+enum WeatherType {
+  WEATHER_TYPE_UNSPECIFIED = 0;
+  WEATHER_TYPE_CLEAR = 1;
+  WEATHER_TYPE_CLOUDY = 2;
+  WEATHER_TYPE_RAIN = 3;
+  WEATHER_TYPE_STORM = 4;
+  WEATHER_TYPE_SNOW = 5;
+}
+
+// Player actions
+message PlayerAction {
+  string player_id = 1;
+  uint64 timestamp = 2;
+  ActionType type = 3;
+  bytes data = 4; // Action-specific data
+}
+
+enum ActionType {
+  ACTION_TYPE_UNSPECIFIED = 0;
+  ACTION_TYPE_MOVE = 1;
+  ACTION_TYPE_ATTACK = 2;
+  ACTION_TYPE_INTERACT = 3;
+  ACTION_TYPE_CHAT = 4;
+  ACTION_TYPE_USE_ITEM = 5;
+  ACTION_TYPE_CAST_SPELL = 6;
+}
+
+// Resource management
+message ResourceRequest {
+  string resource_id = 1;
+  ResourceType type = 2;
+  uint32 priority = 3;
+}
+
+message ResourceResponse {
+  string resource_id = 1;
+  bool success = 2;
+  optional ResourceData data = 3;
+  optional string error_message = 4;
+}
+
+message ResourceData {
+  ResourceType type = 1;
+  bytes data = 2;
+  ResourceMetadata metadata = 3;
+}
+
+message ResourceMetadata {
+  uint64 size = 1;
+  uint64 checksum = 2;
+  string format = 3;
+  uint32 version = 4;
+}
+
+enum ResourceType {
+  RESOURCE_TYPE_UNSPECIFIED = 0;
+  RESOURCE_TYPE_TEXTURE = 1;
+  RESOURCE_TYPE_MESH = 2;
+  RESOURCE_TYPE_AUDIO = 3;
+  RESOURCE_TYPE_SHADER = 4;
+  RESOURCE_TYPE_ANIMATION = 5;
+  RESOURCE_TYPE_SCRIPT = 6;
+}
+
+// Error handling
+message Error {
+  ErrorCode code = 1;
+  string message = 2;
+  optional string details = 3;
+}
+
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  ERROR_CODE_PROTOCOL_ERROR = 1;
+  ERROR_CODE_AUTHENTICATION_FAILED = 2;
+  ERROR_CODE_SERVER_FULL = 3;
+  ERROR_CODE_INVALID_REQUEST = 4;
+  ERROR_CODE_RESOURCE_NOT_FOUND = 5;
+  ERROR_CODE_PERMISSION_DENIED = 6;
+  ERROR_CODE_RATE_LIMITED = 7;
+  ERROR_CODE_INTERNAL_ERROR = 8;
+}
+
+// Disconnect notification
+message Disconnect {
+  DisconnectReason reason = 1;
+  optional string message = 2;
+}
+
+enum DisconnectReason {
+  DISCONNECT_REASON_UNSPECIFIED = 0;
+  DISCONNECT_REASON_CLIENT_REQUEST = 1;
+  DISCONNECT_REASON_SERVER_SHUTDOWN = 2;
+  DISCONNECT_REASON_TIMEOUT = 3;
+  DISCONNECT_REASON_PROTOCOL_ERROR = 4;
+  DISCONNECT_REASON_KICKED = 5;
+  DISCONNECT_REASON_BANNED = 6;
+}

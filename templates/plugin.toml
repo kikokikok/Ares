@@ -1,0 +1,14 @@
+[plugin]
+name = "{{plugin_name}}"
+version = "1.0.0"
+author = "Plugin Developer"
+description = "A sample Nova Core Engine plugin"
+
+[dependencies]
+nova_core_engine = ">=1.0.0"
+
+[permissions]
+resource_access = ["textures", "models"]
+event_access = ["input", "render"]
+network_access = false
+file_system_access = false

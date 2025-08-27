@@ -1,0 +1,11 @@
+[package]
+name = "basic-game"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+nova-core = { path = "../../nova-core" }
+tokio = { version = "1.0", features = ["full"] }
+log = "0.4"
+env_logger = "0.10"
+rand = "0.8"

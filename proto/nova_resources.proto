@@ -1,0 +1,268 @@
+syntax = "proto3";
+
+package nova.resources;
+
+// High-performance resource serialization for Nova Core Engine
+// Optimized for minimal memory footprint and blazing fast ser/deser
+
+// Base resource message
+message Resource {
+  string id = 1;
+  ResourceType type = 2;
+  uint64 size = 3;
+  uint64 checksum = 4;
+  uint32 version = 5;
+  oneof data {
+    TextureResource texture = 10;
+    MeshResource mesh = 11;
+    AudioResource audio = 12;
+    ShaderResource shader = 13;
+    AnimationResource animation = 14;
+    ScriptResource script = 15;
+  }
+}
+
+enum ResourceType {
+  RESOURCE_TYPE_UNSPECIFIED = 0;
+  RESOURCE_TYPE_TEXTURE = 1;
+  RESOURCE_TYPE_MESH = 2;
+  RESOURCE_TYPE_AUDIO = 3;
+  RESOURCE_TYPE_SHADER = 4;
+  RESOURCE_TYPE_ANIMATION = 5;
+  RESOURCE_TYPE_SCRIPT = 6;
+}
+
+// Texture resource optimized for graphics
+message TextureResource {
+  uint32 width = 1;
+  uint32 height = 2;
+  TextureFormat format = 3;
+  uint32 mip_levels = 4;
+  repeated TextureData data = 5; // Multiple mip levels
+  TextureFlags flags = 6;
+}
+
+enum TextureFormat {
+  TEXTURE_FORMAT_UNSPECIFIED = 0;
+  TEXTURE_FORMAT_RGBA8 = 1;
+  TEXTURE_FORMAT_RGB8 = 2;
+  TEXTURE_FORMAT_RGBA16F = 3;
+  TEXTURE_FORMAT_RGBA32F = 4;
+  TEXTURE_FORMAT_DXT1 = 5;
+  TEXTURE_FORMAT_DXT5 = 6;
+  TEXTURE_FORMAT_BC7 = 7;
+}
+
+message TextureData {
+  uint32 level = 1;
+  uint32 width = 2;
+  uint32 height = 3;
+  bytes data = 4; // Raw pixel data, potentially compressed
+}
+
+message TextureFlags {
+  bool is_srgb = 1;
+  bool generate_mipmaps = 2;
+  bool is_cubemap = 3;
+  bool is_array = 4;
+}
+
+// Mesh resource for 3D geometry
+message MeshResource {
+  repeated SubMesh submeshes = 1;
+  BoundingBox bounds = 2;
+  uint32 vertex_count = 3;
+  uint32 triangle_count = 4;
+}
+
+message SubMesh {
+  string material_id = 1;
+  VertexData vertices = 2;
+  repeated uint32 indices = 3;
+  BoundingBox bounds = 4;
+}
+
+message VertexData {
+  repeated Vec3 positions = 1;
+  repeated Vec3 normals = 2;
+  repeated Vec2 tex_coords = 3;
+  repeated Vec3 tangents = 4;
+  repeated ColorRGBA colors = 5;
+}
+
+message Vec2 {
+  float x = 1;
+  float y = 2;
+}
+
+message Vec3 {
+  float x = 1;
+  float y = 2;
+  float z = 3;
+}
+
+message ColorRGBA {
+  float r = 1;
+  float g = 2;
+  float b = 3;
+  float a = 4;
+}
+
+message BoundingBox {
+  Vec3 min = 1;
+  Vec3 max = 2;
+}
+
+// Audio resource for sound effects and music
+message AudioResource {
+  AudioFormat format = 1;
+  uint32 sample_rate = 2;
+  uint32 channels = 3;
+  uint32 bit_depth = 4;
+  bytes data = 5; // Compressed or raw audio data
+  float duration = 6;
+  bool is_looping = 7;
+}
+
+enum AudioFormat {
+  AUDIO_FORMAT_UNSPECIFIED = 0;
+  AUDIO_FORMAT_WAV = 1;
+  AUDIO_FORMAT_OGG = 2;
+  AUDIO_FORMAT_MP3 = 3;
+  AUDIO_FORMAT_FLAC = 4;
+}
+
+// Shader resource for graphics rendering
+message ShaderResource {
+  ShaderType type = 1;
+  string source_code = 2;
+  bytes compiled_code = 3; // Pre-compiled shader bytecode
+  repeated ShaderUniform uniforms = 4;
+  repeated ShaderAttribute attributes = 5;
+  string entry_point = 6;
+}
+
+enum ShaderType {
+  SHADER_TYPE_UNSPECIFIED = 0;
+  SHADER_TYPE_VERTEX = 1;
+  SHADER_TYPE_FRAGMENT = 2;
+  SHADER_TYPE_GEOMETRY = 3;
+  SHADER_TYPE_COMPUTE = 4;
+  SHADER_TYPE_TESSELLATION = 5;
+}
+
+message ShaderUniform {
+  string name = 1;
+  UniformType type = 2;
+  uint32 binding = 3;
+  uint32 array_size = 4;
+}
+
+message ShaderAttribute {
+  string name = 1;
+  AttributeType type = 2;
+  uint32 location = 3;
+}
+
+enum UniformType {
+  UNIFORM_TYPE_UNSPECIFIED = 0;
+  UNIFORM_TYPE_FLOAT = 1;
+  UNIFORM_TYPE_VEC2 = 2;
+  UNIFORM_TYPE_VEC3 = 3;
+  UNIFORM_TYPE_VEC4 = 4;
+  UNIFORM_TYPE_MAT4 = 5;
+  UNIFORM_TYPE_TEXTURE2D = 6;
+  UNIFORM_TYPE_CUBEMAP = 7;
+}
+
+enum AttributeType {
+  ATTRIBUTE_TYPE_UNSPECIFIED = 0;
+  ATTRIBUTE_TYPE_FLOAT = 1;
+  ATTRIBUTE_TYPE_VEC2 = 2;
+  ATTRIBUTE_TYPE_VEC3 = 3;
+  ATTRIBUTE_TYPE_VEC4 = 4;
+}
+
+// Animation resource for character and object animation
+message AnimationResource {
+  string name = 1;
+  float duration = 2;
+  uint32 frame_rate = 3;
+  repeated AnimationTrack tracks = 4;
+  repeated AnimationEvent events = 5;
+  bool is_looping = 6;
+}
+
+message AnimationTrack {
+  string target_node = 1;
+  AnimationProperty property = 2;
+  repeated Keyframe keyframes = 3;
+  InterpolationType interpolation = 4;
+}
+
+enum AnimationProperty {
+  ANIMATION_PROPERTY_UNSPECIFIED = 0;
+  ANIMATION_PROPERTY_TRANSLATION = 1;
+  ANIMATION_PROPERTY_ROTATION = 2;
+  ANIMATION_PROPERTY_SCALE = 3;
+  ANIMATION_PROPERTY_MORPH_WEIGHTS = 4;
+}
+
+enum InterpolationType {
+  INTERPOLATION_TYPE_UNSPECIFIED = 0;
+  INTERPOLATION_TYPE_LINEAR = 1;
+  INTERPOLATION_TYPE_STEP = 2;
+  INTERPOLATION_TYPE_CUBIC_SPLINE = 3;
+}
+
+message Keyframe {
+  float time = 1;
+  oneof value {
+    Vec3 vec3_value = 2;
+    Quaternion quat_value = 3;
+    float float_value = 4;
+    FloatArray float_array = 5;
+  }
+}
+
+message FloatArray {
+  repeated float values = 1;
+}
+
+message Quaternion {
+  float x = 1;
+  float y = 2;
+  float z = 3;
+  float w = 4;
+}
+
+message AnimationEvent {
+  float time = 1;
+  string event_name = 2;
+  string event_data = 3;
+}
+
+// Script resource for game logic
+message ScriptResource {
+  ScriptLanguage language = 1;
+  string source_code = 2;
+  bytes compiled_code = 3; // Pre-compiled bytecode if applicable
+  repeated string dependencies = 4;
+  string entry_point = 5;
+  ScriptMetadata metadata = 6;
+}
+
+enum ScriptLanguage {
+  SCRIPT_LANGUAGE_UNSPECIFIED = 0;
+  SCRIPT_LANGUAGE_LUA = 1;
+  SCRIPT_LANGUAGE_PYTHON = 2;
+  SCRIPT_LANGUAGE_JAVASCRIPT = 3;
+  SCRIPT_LANGUAGE_WASM = 4;
+}
+
+message ScriptMetadata {
+  string author = 1;
+  string description = 2;
+  string version = 3;
+  repeated string tags = 4;
+}
