@@ -25,7 +25,7 @@ jobs:
       run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
     
     - name: Cache dependencies
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: |
           ~/.cargo/registry
@@ -68,7 +68,7 @@ jobs:
       run: cargo build --release --verbose --all-features
     
     - name: Upload artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: nova-engine-linux
         path: |
@@ -99,7 +99,7 @@ jobs:
       run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
     
     - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
+      uses: codecov/codecov-action@v4
       with:
         file: lcov.info
         fail_ci_if_error: true
